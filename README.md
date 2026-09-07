@@ -23,6 +23,9 @@ So "build a bus tracker" is really three problems:
 This repository is a working answer to all three, small enough to demonstrate
 and honest about what it does not know.
 
+> Design reasoning, diagrams, and the decision log live in
+> [docs/architecture.md](docs/architecture.md).
+
 ## What actually runs
 
 ```
@@ -227,8 +230,8 @@ api/            Azure Functions app
   function_app.py     HTTP + timer triggers
   shared/             geo, auth, validation, eta, storage
 web/            rider, driver, admin pages
-tools/          simulator, Nagercoil seed
+tools/          simulator, Nagercoil seed, GTFS importer
 infra/          deploy.ps1
 tests/          unit, storage, and end-to-end suites
-docs/           threat model
+docs/           architecture, threat model
 ```
