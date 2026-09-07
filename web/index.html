@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Bus Tracker &mdash; Nagercoil</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/maplibre-gl/4.7.1/maplibre-gl.min.css">
+<style>
+  :root {
+    --bg: #ffffff;
+    --panel: #ffffff;
+    --text: #111827;
+    --muted: #6b7280;
+    --border: #e5e7eb;
+    --accent: #1d4ed8;
+    --live: #16a34a;
+    --uncertain: #d97706;
+    --stale: #6b7280;
+    --shadow: 0 1px 3px rgba(0,0,0,.1), 0 4px 16px rgba(0,0,0,.08);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0b0f19; --panel: #151b28; --text: #e5e7eb; --muted: #9ca3af;
+      --border: #263042; --accent: #60a5fa;
+      --shadow: 0 1px 3px rgba(0,0,0,.5), 0 4px 16px rgba(0,0,0,.4);
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    color: var(--text); background: var(--bg);
+  }
+  #map { position: absolute; inset: 0; }
+
+  .panel {
+    position: absolute; z-index: 5;
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 10px; box-shadow: var(--shadow);
+  }
+  #top {
+    top: 10px; left: 10px; right: 10px;
+    display: flex; gap: 8px; align-items: center; padding: 8px 10px;
+    flex-wrap: wrap;
+  }
+  #top h1 { font-size: 15px; margin: 0 6px 0 0; font-weight: 650; white-space: nowrap; }
+  select, button {
+    font: inherit; color: var(--text); background: var(--bg);
+    border: 1px solid var(--border); border-radius: 7px; padding: 6px 9px;
+    cursor: pointer;
+  }
+  button:hover, select:hover { border-color: var(--accent); }
+  #status { margin-left: auto; color: var(--muted); font-size: 12.5px; white-space: nowrap; }
+  #status.error { color: #dc2626; }
+
+  #legend {
+    left: 10px; bottom: 24px; padding: 9px 11px; font-size: 12.5px; max-width: 220px;
+  }
+  #legend b { display: block; margin-bottom: 6px; font-size: 12px; text-transform: uppercase;
+              letter-spacing: .04em; color: var(--muted); font-weight: 650; }
+  .key { display: flex; align-items: center; gap: 7px; margin: 4px 0; }
+  .dot { width: 11px; height: 11px; border-radius: 50%; flex: none;
+         border: 2px solid rgba(255,255,255,.9); box-shadow: 0 0 0 1px rgba(0,0,0,.25); }
+  .key small { color: var(--muted); }
+
+  #sidebar {
+    top: 62px; right: 10px; width: 300px; max-height: calc(100% - 100px);
+    overflow-y: auto; padding: 12px 14px; display: none;
+  }
+  #sidebar.open { display: block; }
+  #sidebar h2 { margin: 0 0 2px; font-size: 15px; }
+  #sidebar .sub { color: var(--muted); font-size: 12.5px; margin-bottom: 10px; }
+  .arrival {
+    border-top: 1px solid var(--border); padding: 9px 0;
+    display: flex; justify-content: space-between; gap: 10px; align-items: baseline;
+  }
+  .arrival .who { font-weight: 600; }
+  .arrival .meta { color: var(--muted); font-size: 12px; }
+  .arrival .when { font-variant-numeric: tabular-nums; font-weight: 650; white-space: nowrap; }
+  .empty { color: var(--muted); font-size: 13px; padding: 10px 0; border-top: 1px solid var(--border); }
+  .close { float: right; border: 0; background: none; font-size: 18px; line-height: 1;
+           color: var(--muted); padding: 0 2px; }
+
+  .bus-marker {
+    width: 18px; height: 18px; border-radius: 50%;
+    border: 2.5px solid #fff; box-shadow: 0 1px 4px rgba(0,0,0,.45);
+    cursor: pointer; display: grid; place-items: center;
+  }
+  .bus-marker.sim { border-style: dashed; }
+  .bus-marker .head {
+    width: 0; height: 0; border-left: 4px solid transparent; border-right: 4px solid transparent;
+    border-bottom: 7px solid rgba(255,255,255,.95); position: relative; top: -1px;
+  }
+  .stop-marker {
+    width: 10px; height: 10px; border-radius: 50%; background: var(--bg);
+    border: 2.5px solid var(--accent); cursor: pointer;
+  }
+  .maplibregl-popup-content {
+    background: var(--panel); color: var(--text); border-radius: 8px;
+    font: inherit; padding: 10px 12px; box-shadow: var(--shadow);
+  }
+  .maplibregl-popup-content b { display: block; margin-bottom: 3px; }
+  .maplibregl-popup-content .row { color: var(--muted); font-size: 12.5px; }
+  .simtag {
+    display: inline-block; font-size: 10.5px; font-weight: 700; letter-spacing: .04em;
+    background: var(--uncertain); color: #fff; border-radius: 4px; padding: 1px 5px;
+    margin-left: 5px; vertical-align: 1px;
+  }
+  @media (max-width: 560px) {
+    #sidebar { left: 10px; right: 10px; width: auto; top: auto; bottom: 10px; max-height: 45%; }
+    #legend { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<div id="map"></div>
+
+<div class="panel" id="top">
+  <h1>Bus Tracker</h1>
+  <select id="routeSelect"><option value="">All routes</option></select>
+  <button id="fitBtn" title="Zoom to fit the selected route">Fit</button>
+  <span id="status">Starting&hellip;</span>
+</div>
+
+<div class="panel" id="tileWarn" style="display:none;top:58px;left:10px;padding:7px 10px;font-size:12.5px;color:var(--muted);max-width:260px">
+  Basemap tiles unavailable. Routes and buses are still live &mdash; only the
+  background map is missing.
+</div>
+
+<div class="panel" id="legend">
+  <b>Confidence</b>
+  <div class="key"><span class="dot" style="background:var(--live)"></span>
+    <span>Live <small>&mdash; under 30s old</small></span></div>
+  <div class="key"><span class="dot" style="background:var(--uncertain)"></span>
+    <span>Uncertain <small>&mdash; delayed or off&#8209;route</small></span></div>
+  <div class="key"><span class="dot" style="background:var(--stale)"></span>
+    <span>Last known <small>&mdash; not reporting</small></span></div>
+  <div class="key" style="margin-top:7px">
+    <span class="dot" style="background:var(--live);border-style:dashed"></span>
+    <span><small>Dashed outline = simulated bus</small></span>
+  </div>
+</div>
+
+<div class="panel" id="sidebar">
+  <button class="close" id="closeSidebar" aria-label="Close">&times;</button>
+  <h2 id="stopName">Stop</h2>
+  <div class="sub" id="stopSub"></div>
+  <div id="arrivals"></div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/maplibre-gl/4.7.1/maplibre-gl.min.js"></script>
+<script src="js/config.js"></script>
+<script src="js/api.js"></script>
+<script>
+// CFG comes from js/api.js, which reads window.BUSTRACK_CONFIG.
+
+const map = new maplibregl.Map({
+  container: "map",
+  style: osmStyle(),
+  center: CFG.defaultCenter,
+  zoom: CFG.defaultZoom,
+  attributionControl: { compact: true },
+});
+map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "bottom-right");
+map.addControl(new maplibregl.GeolocateControl({ trackUserLocation: true }), "bottom-right");
+
+const statusEl = document.getElementById("status");
+const routeSelect = document.getElementById("routeSelect");
+const sidebar = document.getElementById("sidebar");
+
+let routes = [];            // all routes, with geometry
+let busMarkers = new Map(); // busId -> maplibregl.Marker
+let stopMarkers = [];
+let selectedRoute = "";
+let selectedStopId = null;
+let lastGoodPoll = null;
+
+function setStatus(text, isError) {
+  statusEl.textContent = text;
+  statusEl.classList.toggle("error", !!isError);
+}
+
+// -------------------------------------------------------------------------
+// Routes and stops
+// -------------------------------------------------------------------------
+
+async function loadRoutes() {
+  const data = await apiGet("/routes", { city: CFG.city });
+  routes = data.routes;
+
+  routeSelect.innerHTML = '<option value="">All routes</option>';
+  routes.forEach((r) => {
+    const opt = document.createElement("option");
+    opt.value = r.routeId;
+    opt.textContent = r.name;
+    routeSelect.appendChild(opt);
+  });
+
+  drawRouteLines();
+}
+
+function drawRouteLines() {
+  // Layers need a loaded style. If the basemap is still coming up (or never
+  // does), defer rather than throw -- the buses do not depend on this.
+  if (!map.isStyleLoaded()) {
+    whenStyleReady(map, drawRouteLines);
+    return;
+  }
+
+  const features = routes
+    .filter((r) => r.polyline && (!selectedRoute || r.routeId === selectedRoute))
+    .map((r) => ({
+      type: "Feature",
+      properties: { routeId: r.routeId, name: r.name },
+      geometry: { type: "LineString", coordinates: decodePolyline(r.polyline) },
+    }));
+
+  const geojson = { type: "FeatureCollection", features };
+
+  if (map.getSource("routes")) {
+    map.getSource("routes").setData(geojson);
+    return;
+  }
+
+  map.addSource("routes", { type: "geojson", data: geojson });
+  map.addLayer({
+    id: "routes-casing",
+    type: "line",
+    source: "routes",
+    paint: { "line-color": "#ffffff", "line-width": 7, "line-opacity": 0.85 },
+    layout: { "line-cap": "round", "line-join": "round" },
+  });
+  map.addLayer({
+    id: "routes-line",
+    type: "line",
+    source: "routes",
+    paint: { "line-color": "#1d4ed8", "line-width": 3.5, "line-opacity": 0.9 },
+    layout: { "line-cap": "round", "line-join": "round" },
+  });
+}
+
+async function loadStops() {
+  stopMarkers.forEach((m) => m.remove());
+  stopMarkers = [];
+
+  const data = await apiGet("/stops", { city: CFG.city, routeId: selectedRoute || undefined });
+  data.stops.forEach((stop) => {
+    const el = document.createElement("div");
+    el.className = "stop-marker";
+    el.title = stop.name;
+    el.addEventListener("click", (e) => {
+      e.stopPropagation();
+      showStop(stop);
+    });
+    stopMarkers.push(new maplibregl.Marker({ element: el }).setLngLat([stop.lon, stop.lat]).addTo(map));
+  });
+}
+
+// -------------------------------------------------------------------------
+// Live buses
+// -------------------------------------------------------------------------
+
+function busPopupHtml(bus) {
+  const conf = confidenceOf(bus.confidence);
+  const flags = describeFlags(bus.flags);
+  return `
+    <b>${escapeHtml(bus.label)}${bus.isSimulated ? '<span class="simtag">SIM</span>' : ""}</b>
+    <div class="row">${conf.label} &middot; ${formatAge(bus.ageS)}</div>
+    ${flags ? `<div class="row">Note: ${escapeHtml(flags)}</div>` : ""}
+    ${bus.speedMps != null ? `<div class="row">${(bus.speedMps * 3.6).toFixed(0)} km/h</div>` : ""}
+    <div class="row" style="margin-top:4px;font-size:11.5px">${escapeHtml(conf.hint)}</div>
+  `;
+}
+
+function renderBuses(buses) {
+  const seen = new Set();
+
+  buses.forEach((bus) => {
+    seen.add(bus.busId);
+    const conf = confidenceOf(bus.confidence);
+    let marker = busMarkers.get(bus.busId);
+
+    if (!marker) {
+      const el = document.createElement("div");
+      el.className = "bus-marker" + (bus.isSimulated ? " sim" : "");
+      el.innerHTML = '<span class="head"></span>';
+      marker = new maplibregl.Marker({ element: el })
+        .setLngLat([bus.lon, bus.lat])
+        .setPopup(new maplibregl.Popup({ offset: 14, closeButton: false }))
+        .addTo(map);
+      busMarkers.set(bus.busId, marker);
+    } else {
+      marker.setLngLat([bus.lon, bus.lat]);
+    }
+
+    const el = marker.getElement();
+    el.style.background = conf.color;
+    // A stale bus fades rather than vanishing: it is still information, just
+    // weaker information, and hiding it would look like the bus never existed.
+    el.style.opacity = bus.confidence === "last_known" ? "0.55" : "1";
+    if (bus.heading != null) {
+      el.style.transform = (el.style.transform || "").replace(/ rotate\([^)]*\)/, "") +
+        ` rotate(${bus.heading}deg)`;
+    }
+    marker.getPopup().setHTML(busPopupHtml(bus));
+  });
+
+  // Remove buses the server no longer reports at all.
+  for (const [busId, marker] of busMarkers) {
+    if (!seen.has(busId)) { marker.remove(); busMarkers.delete(busId); }
+  }
+}
+
+async function poll() {
+  try {
+    const data = await apiGet("/live", { routeId: selectedRoute || undefined });
+    renderBuses(data.buses);
+    lastGoodPoll = Date.now();
+
+    const live = data.buses.filter((b) => b.confidence === "live").length;
+    const sim = data.buses.filter((b) => b.isSimulated).length;
+    const parts = [`${data.count} bus${data.count === 1 ? "" : "es"}`, `${live} live`];
+    if (sim) parts.push(`${sim} simulated`);
+    setStatus(parts.join(" · "));
+
+    if (selectedStopId) refreshArrivals();
+  } catch (err) {
+    // Say the connection is down rather than leaving stale dots looking live.
+    const secondsDown = lastGoodPoll ? Math.round((Date.now() - lastGoodPoll) / 1000) : null;
+    setStatus(secondsDown ? `Offline for ${secondsDown}s` : "Cannot reach the server", true);
+  }
+}
+
+// -------------------------------------------------------------------------
+// Stop arrivals
+// -------------------------------------------------------------------------
+
+async function showStop(stop) {
+  selectedStopId = stop.stopId;
+  document.getElementById("stopName").textContent = stop.name;
+  document.getElementById("stopSub").textContent = "Next arrivals";
+  document.getElementById("arrivals").innerHTML = '<div class="empty">Checking…</div>';
+  sidebar.classList.add("open");
+  refreshArrivals();
+}
+
+async function refreshArrivals() {
+  if (!selectedStopId) return;
+  try {
+    const data = await apiGet("/eta", { stopId: selectedStopId, city: CFG.city });
+    const box = document.getElementById("arrivals");
+
+    if (!data.arrivals.length) {
+      // Distinguish "nothing is coming" from "nothing is being tracked".
+      box.innerHTML = data.busesTracked
+        ? '<div class="empty">No bus is currently approaching this stop.</div>'
+        : '<div class="empty">No buses are being tracked on the routes through this stop right now.</div>';
+      return;
+    }
+
+    box.innerHTML = data.arrivals.map((a) => {
+      const conf = confidenceOf(a.confidence);
+      const note = a.speedSource === "default"
+        ? "estimated from typical speed"
+        : `based on ${a.speedSource} speed`;
+      return `
+        <div class="arrival">
+          <div>
+            <div class="who">${escapeHtml(a.routeName)}${a.isSimulated ? '<span class="simtag">SIM</span>' : ""}</div>
+            <div class="meta">${(a.distanceM / 1000).toFixed(1)} km away &middot; ${escapeHtml(note)}</div>
+            <div class="meta" style="color:${conf.color}">${conf.label}</div>
+          </div>
+          <div class="when">${escapeHtml(a.text)}</div>
+        </div>`;
+    }).join("");
+  } catch (err) {
+    document.getElementById("arrivals").innerHTML =
+      '<div class="empty">Could not load arrivals.</div>';
+  }
+}
+
+// -------------------------------------------------------------------------
+// Wiring
+// -------------------------------------------------------------------------
+
+function escapeHtml(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => (
+    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
+  ));
+}
+
+function fitToRoutes() {
+  const shown = routes.filter((r) => r.polyline && (!selectedRoute || r.routeId === selectedRoute));
+  if (!shown.length) return;
+
+  const bounds = new maplibregl.LngLatBounds();
+  shown.forEach((r) => decodePolyline(r.polyline).forEach((c) => bounds.extend(c)));
+  map.fitBounds(bounds, { padding: 60, maxZoom: 15, duration: 600 });
+}
+
+routeSelect.addEventListener("change", async () => {
+  selectedRoute = routeSelect.value;
+  selectedStopId = null;
+  sidebar.classList.remove("open");
+  drawRouteLines();
+  await loadStops();
+  await poll();
+  fitToRoutes();
+});
+
+document.getElementById("fitBtn").addEventListener("click", fitToRoutes);
+document.getElementById("closeSidebar").addEventListener("click", () => {
+  sidebar.classList.remove("open");
+  selectedStopId = null;
+});
+
+onTileTrouble(map, () => {
+  document.getElementById("tileWarn").style.display = "block";
+});
+
+// Start fetching immediately rather than waiting on map "load". A slow or
+// blocked basemap must not stop bus positions from appearing -- the positions
+// are the product, the map is only the backdrop.
+(async function start() {
+  try {
+    await loadRoutes();
+    await loadStops();
+    await poll();
+    setInterval(poll, CFG.pollIntervalMs);
+  } catch (err) {
+    setStatus("Cannot reach the server", true);
+    console.error(err);
+  }
+})();
+
+map.on("load", () => {
+  drawRouteLines();
+  fitToRoutes();
+});
+</script>
+</body>
+</html>

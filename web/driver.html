@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Driver &mdash; Bus Tracker</title>
+<style>
+  :root {
+    --bg: #f8fafc; --panel: #fff; --text: #0f172a; --muted: #64748b;
+    --border: #e2e8f0; --accent: #1d4ed8;
+    --ok: #16a34a; --warn: #d97706; --bad: #dc2626;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #0b0f19; --panel: #151b28; --text: #e5e7eb; --muted: #94a3b8;
+            --border: #263042; --accent: #60a5fa; }
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    margin: 0; padding: 16px; background: var(--bg); color: var(--text);
+    font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    max-width: 520px; margin-inline: auto;
+  }
+  h1 { font-size: 19px; margin: 0 0 3px; }
+  .sub { color: var(--muted); font-size: 13.5px; margin-bottom: 16px; }
+
+  .card {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 12px; padding: 15px; margin-bottom: 13px;
+  }
+  label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 5px; color: var(--muted); }
+  input[type=text], input[type=password] {
+    width: 100%; font: inherit; padding: 11px 12px; border-radius: 9px;
+    border: 1px solid var(--border); background: var(--bg); color: var(--text);
+    margin-bottom: 11px;
+  }
+  button {
+    font: inherit; font-weight: 620; border-radius: 10px; border: 1px solid var(--border);
+    padding: 13px 16px; background: var(--panel); color: var(--text); cursor: pointer; width: 100%;
+  }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.danger  { background: var(--bad); border-color: var(--bad); color: #fff; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+
+  #bigStatus {
+    text-align: center; padding: 26px 15px; border-radius: 12px;
+    border: 2px solid var(--border); margin-bottom: 13px; background: var(--panel);
+  }
+  #bigStatus .dot {
+    width: 15px; height: 15px; border-radius: 50%; display: inline-block;
+    background: var(--muted); margin-right: 8px; vertical-align: -2px;
+  }
+  #bigStatus.on  { border-color: var(--ok); }
+  #bigStatus.on .dot { background: var(--ok); animation: pulse 2s infinite; }
+  #bigStatus.err { border-color: var(--bad); }
+  #bigStatus.err .dot { background: var(--bad); }
+  @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .35 } }
+  #bigStatus .headline { font-size: 20px; font-weight: 680; }
+  #bigStatus .detail { color: var(--muted); font-size: 13.5px; margin-top: 6px; }
+
+  .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; text-align: center; }
+  .stats div { background: var(--bg); border: 1px solid var(--border); border-radius: 9px; padding: 9px 5px; }
+  .stats b { display: block; font-size: 19px; font-variant-numeric: tabular-nums; }
+  .stats span { font-size: 11.5px; color: var(--muted); }
+
+  .row { display: flex; align-items: center; gap: 10px; margin-top: 11px; }
+  .row input[type=checkbox] { width: 20px; height: 20px; accent-color: var(--accent); flex: none; }
+  .row label { margin: 0; font-size: 14px; font-weight: 500; color: var(--text); }
+  .hint { color: var(--muted); font-size: 12.5px; margin-top: 4px; }
+
+  .note {
+    border-left: 3px solid var(--warn); padding: 9px 12px; border-radius: 0 8px 8px 0;
+    background: color-mix(in srgb, var(--warn) 9%, transparent);
+    font-size: 13px; margin-bottom: 13px;
+  }
+  .note.bad { border-left-color: var(--bad); background: color-mix(in srgb, var(--bad) 9%, transparent); }
+  .note b { display: block; margin-bottom: 2px; }
+
+  #log {
+    font: 12px/1.55 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    max-height: 190px; overflow-y: auto; background: var(--bg);
+    border: 1px solid var(--border); border-radius: 9px; padding: 9px 11px;
+  }
+  #log div { padding: 1px 0; }
+  #log .ok { color: var(--ok); }
+  #log .rej { color: var(--bad); }
+  #log .inf { color: var(--muted); }
+</style>
+</head>
+<body>
+
+<h1>Driver</h1>
+<div class="sub">Share this bus's position while you drive the route.</div>
+
+<div id="insecureWarning" class="note bad" style="display:none">
+  <b>This page needs a secure connection</b>
+  The browser only gives out GPS and signing keys over <code>https://</code> or on
+  <code>localhost</code>. Open the deployed Azure address instead of a plain
+  <code>http://</code> one, or tracking cannot start.
+</div>
+
+<div id="setup" class="card">
+  <label for="busId">Bus ID</label>
+  <input type="text" id="busId" placeholder="NGL-01" autocomplete="off" autocapitalize="characters">
+
+  <label for="secret">Key</label>
+  <input type="password" id="secret" placeholder="from the admin page QR code" autocomplete="off">
+
+  <div class="row">
+    <input type="checkbox" id="recordMode">
+    <label for="recordMode">Record mode &mdash; trace a new route</label>
+  </div>
+  <div class="hint">
+    Turn this on to map a route that does not exist yet. Ride it once end to
+    end, then turn the trace into a saved route from the admin page.
+  </div>
+</div>
+
+<div id="bigStatus">
+  <div class="headline"><span class="dot"></span><span id="statusText">Not tracking</span></div>
+  <div class="detail" id="statusDetail">Enter the bus ID and key, then start.</div>
+</div>
+
+<button id="startBtn" class="primary">Start tracking</button>
+<button id="stopBtn" class="danger" style="display:none">Stop tracking</button>
+
+<div class="card" style="margin-top:13px">
+  <div class="stats">
+    <div><b id="statSent">0</b><span>accepted</span></div>
+    <div><b id="statRejected">0</b><span>rejected</span></div>
+    <div><b id="statAccuracy">&ndash;</b><span>GPS &plusmn;m</span></div>
+  </div>
+</div>
+
+<div class="note">
+  <b>Keep this screen on</b>
+  Phone browsers stop reporting GPS when the screen locks or you switch apps.
+  This page asks to keep the screen awake, but the reliable fix is a dedicated
+  tracker fitted to the bus.
+</div>
+
+<div class="card">
+  <label>Activity</label>
+  <div id="log"><div class="inf">Waiting to start.</div></div>
+</div>
+
+<script src="js/config.js"></script>
+<script src="js/api.js"></script>
+<script>
+const els = {
+  busId: document.getElementById("busId"),
+  secret: document.getElementById("secret"),
+  record: document.getElementById("recordMode"),
+  start: document.getElementById("startBtn"),
+  stop: document.getElementById("stopBtn"),
+  box: document.getElementById("bigStatus"),
+  text: document.getElementById("statusText"),
+  detail: document.getElementById("statusDetail"),
+  sent: document.getElementById("statSent"),
+  rejected: document.getElementById("statRejected"),
+  accuracy: document.getElementById("statAccuracy"),
+  log: document.getElementById("log"),
+  setup: document.getElementById("setup"),
+};
+
+let watchId = null;
+let timerId = null;
+let wakeLock = null;
+let latestPosition = null;
+let sent = 0;
+let rejected = 0;
+
+// -------------------------------------------------------------------------
+// Credentials come from the URL fragment so a QR code can carry them.
+// A fragment is never sent to the server or written to server logs, which is
+// why the key lives after the '#' rather than in a query parameter.
+// -------------------------------------------------------------------------
+(function readCredentialsFromUrl() {
+  const params = new URLSearchParams(location.hash.slice(1));
+  if (params.get("bus")) els.busId.value = params.get("bus");
+  if (params.get("key")) els.secret.value = params.get("key");
+  if (params.get("record") === "1") els.record.checked = true;
+
+  // Remember for next time so a driver scans the QR once, not every shift.
+  try {
+    if (!els.busId.value) els.busId.value = localStorage.getItem("bustrack.busId") || "";
+    if (!els.secret.value) els.secret.value = localStorage.getItem("bustrack.secret") || "";
+  } catch (e) { /* private mode; the driver just retypes */ }
+})();
+
+if (!window.isSecureContext) {
+  document.getElementById("insecureWarning").style.display = "block";
+  els.start.disabled = true;
+}
+
+function log(message, kind) {
+  const line = document.createElement("div");
+  line.className = kind || "inf";
+  const now = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  line.textContent = `${now}  ${message}`;
+  els.log.prepend(line);
+  while (els.log.childElementCount > 60) els.log.lastElementChild.remove();
+}
+
+function setStatus(text, detail, state) {
+  els.text.textContent = text;
+  els.detail.textContent = detail;
+  els.box.className = state || "";
+}
+
+// -------------------------------------------------------------------------
+// Tracking
+// -------------------------------------------------------------------------
+
+async function start() {
+  const busId = els.busId.value.trim();
+  const secret = els.secret.value.trim();
+
+  if (!busId || !secret) {
+    setStatus("Missing details", "Enter both the bus ID and the key.", "err");
+    return;
+  }
+  if (!navigator.geolocation) {
+    setStatus("No GPS", "This browser cannot report a location.", "err");
+    return;
+  }
+
+  try {
+    localStorage.setItem("bustrack.busId", busId);
+    localStorage.setItem("bustrack.secret", secret);
+  } catch (e) { /* private mode */ }
+
+  sent = 0; rejected = 0;
+  els.sent.textContent = "0";
+  els.rejected.textContent = "0";
+
+  els.start.style.display = "none";
+  els.stop.style.display = "block";
+  els.setup.style.display = "none";
+  els.busId.disabled = els.secret.disabled = true;
+
+  setStatus("Getting a fix…", "Waiting for the first GPS reading.", "");
+  log(els.record.checked ? "Started in record mode" : "Started tracking");
+
+  // High accuracy is worth the battery here: a bus position good to 50 m is
+  // not much use for telling a rider which stop it is near.
+  watchId = navigator.geolocation.watchPosition(
+    (pos) => {
+      latestPosition = pos;
+      els.accuracy.textContent = Math.round(pos.coords.accuracy);
+    },
+    (err) => {
+      setStatus("GPS unavailable", err.message, "err");
+      log(`GPS error: ${err.message}`, "rej");
+    },
+    { enableHighAccuracy: true, maximumAge: 5000, timeout: 20000 }
+  );
+
+  timerId = setInterval(pushFix, CFG.pingIntervalMs);
+  setTimeout(pushFix, 1500); // don't make the driver wait a full interval
+
+  requestWakeLock();
+}
+
+function stop() {
+  if (watchId !== null) { navigator.geolocation.clearWatch(watchId); watchId = null; }
+  if (timerId !== null) { clearInterval(timerId); timerId = null; }
+  releaseWakeLock();
+
+  els.start.style.display = "block";
+  els.stop.style.display = "none";
+  els.setup.style.display = "block";
+  els.busId.disabled = els.secret.disabled = false;
+
+  setStatus("Not tracking", `Sent ${sent} position${sent === 1 ? "" : "s"} this session.`, "");
+  log("Stopped tracking");
+}
+
+async function pushFix() {
+  if (!latestPosition) {
+    setStatus("Waiting for GPS", "No fix yet. Move somewhere with a clearer view of the sky.", "");
+    return;
+  }
+
+  const c = latestPosition.coords;
+  const fix = {
+    lat: Number(c.latitude.toFixed(6)),
+    lon: Number(c.longitude.toFixed(6)),
+    ts: Date.now() / 1000,
+    accuracy: c.accuracy != null ? Number(c.accuracy.toFixed(1)) : null,
+    speed: c.speed != null && !Number.isNaN(c.speed) ? Number(c.speed.toFixed(2)) : null,
+    heading: c.heading != null && !Number.isNaN(c.heading) ? Number(c.heading.toFixed(1)) : null,
+    nonce: crypto.randomUUID().replace(/-/g, "").slice(0, 16),
+  };
+  if (els.record.checked) fix.record = true;
+
+  let result;
+  try {
+    result = await sendPing(els.busId.value.trim(), els.secret.value.trim(), fix);
+  } catch (err) {
+    setStatus("Cannot reach the server", "Check the network connection.", "err");
+    log("Network error", "rej");
+    return;
+  }
+
+  if (result.ok) {
+    sent += 1;
+    els.sent.textContent = sent;
+    const flags = (result.body && result.body.flags) || [];
+    const note = flags.length ? describeFlags(flags) : "";
+    setStatus(
+      els.record.checked ? "Recording" : "Tracking",
+      note ? `Sent — ${note}` : `Sent ${sent} position${sent === 1 ? "" : "s"}.`,
+      "on"
+    );
+    log(note ? `accepted (${note})` : "accepted", "ok");
+    return;
+  }
+
+  rejected += 1;
+  els.rejected.textContent = rejected;
+
+  const body = result.body || {};
+  const reason = body.reason || `HTTP ${result.status}`;
+  const detail = body.detail || body.error || "";
+
+  // Tell the driver what to do, not just what went wrong.
+  const advice = {
+    bad_signature: "The key is wrong. Re-scan the QR code from the admin page.",
+    teleport: "That jump was too large to be real. Usually a bad GPS fix; it will settle.",
+    stale_timestamp: "This phone's clock is behind. Enable automatic date and time.",
+    future_timestamp: "This phone's clock is ahead. Enable automatic date and time.",
+    too_frequent: "Sending too fast; slowing down automatically.",
+    bad_coords: "The GPS gave an impossible position. Waiting for a better fix.",
+  }[reason] || detail || "The server rejected this position.";
+
+  setStatus("Rejected", advice, "err");
+  log(`rejected: ${reason}${detail ? " (" + detail + ")" : ""}`, "rej");
+
+  if (result.status === 401) stop(); // no point continuing with a bad key
+}
+
+// -------------------------------------------------------------------------
+// Keep the screen awake. This is a mitigation, not a fix: the operating
+// system can still suspend the page, which is the honest argument for a
+// dedicated tracker instead of a phone.
+// -------------------------------------------------------------------------
+
+async function requestWakeLock() {
+  if (!("wakeLock" in navigator)) {
+    log("Screen wake lock not supported; keep the screen on manually");
+    return;
+  }
+  try {
+    wakeLock = await navigator.wakeLock.request("screen");
+    log("Screen will stay awake");
+    wakeLock.addEventListener("release", () => log("Screen wake lock released"));
+  } catch (err) {
+    log(`Could not keep the screen awake: ${err.message}`);
+  }
+}
+
+function releaseWakeLock() {
+  if (wakeLock) { wakeLock.release().catch(() => {}); wakeLock = null; }
+}
+
+// Re-acquire after the driver switches away and back.
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && timerId !== null && !wakeLock) {
+    requestWakeLock();
+  }
+});
+
+els.start.addEventListener("click", start);
+els.stop.addEventListener("click", stop);
+window.addEventListener("beforeunload", releaseWakeLock);
+</script>
+</body>
+</html>

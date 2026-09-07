@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Admin &mdash; Bus Tracker</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/maplibre-gl/4.7.1/maplibre-gl.min.css">
+<style>
+  :root {
+    --bg: #f8fafc; --panel: #fff; --text: #0f172a; --muted: #64748b;
+    --border: #e2e8f0; --accent: #1d4ed8; --ok: #16a34a; --warn: #d97706; --bad: #dc2626;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #0b0f19; --panel: #151b28; --text: #e5e7eb; --muted: #94a3b8;
+            --border: #263042; --accent: #60a5fa; }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 18px; background: var(--bg); color: var(--text);
+    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  h1 { font-size: 20px; margin: 0 0 2px; }
+  .sub { color: var(--muted); font-size: 13px; margin-bottom: 16px; }
+  h2 { font-size: 15px; margin: 0 0 10px; }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); gap: 14px; align-items: start; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 15px; }
+  .card.wide { grid-column: 1 / -1; }
+
+  label { display: block; font-size: 12.5px; font-weight: 620; color: var(--muted); margin-bottom: 4px; }
+  input, select {
+    width: 100%; font: inherit; padding: 9px 10px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--bg); color: var(--text); margin-bottom: 10px;
+  }
+  button {
+    font: inherit; font-weight: 600; border-radius: 8px; border: 1px solid var(--border);
+    padding: 9px 14px; background: var(--panel); color: var(--text); cursor: pointer;
+  }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.small { padding: 5px 9px; font-size: 12.5px; }
+  button.link { border: 0; background: none; color: var(--accent); padding: 3px 5px; text-decoration: underline; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; font-size: 11.5px; text-transform: uppercase; letter-spacing: .04em;
+       color: var(--muted); padding: 5px 6px; border-bottom: 1px solid var(--border); }
+  td { padding: 7px 6px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+  tr:last-child td { border-bottom: 0; }
+  code { font: 12px ui-monospace, Menlo, Consolas, monospace;
+         background: var(--bg); padding: 1px 5px; border-radius: 4px; }
+
+  .tag { display: inline-block; font-size: 10.5px; font-weight: 700; letter-spacing: .03em;
+         border-radius: 4px; padding: 1px 5px; color: #fff; }
+  .tag.sim { background: var(--warn); }
+
+  #map { height: 380px; border-radius: 10px; border: 1px solid var(--border); }
+  .maplibregl-popup-content { background: var(--panel); color: var(--text); font: inherit; }
+
+  .reason { font-weight: 620; }
+  .reason.teleport, .reason.bad_signature { color: var(--bad); }
+  .reason.stale_timestamp, .reason.future_timestamp, .reason.too_frequent { color: var(--warn); }
+  .muted { color: var(--muted); }
+  .empty { color: var(--muted); padding: 12px 0; font-size: 13px; }
+
+  #qrBox { text-align: center; padding: 12px 0; display: none; }
+  #qrBox img { background: #fff; padding: 9px; border-radius: 9px; }
+  #qrBox .who { font-weight: 650; margin-bottom: 8px; }
+  #qrBox .hint { color: var(--muted); font-size: 12.5px; margin-top: 8px; }
+  #qrBox a { color: var(--accent); font-size: 12px; word-break: break-all; }
+
+  .note { border-left: 3px solid var(--warn); padding: 8px 11px; border-radius: 0 8px 8px 0;
+          background: color-mix(in srgb, var(--warn) 9%, transparent); font-size: 12.5px; margin-top: 10px; }
+  .drawhint { font-size: 12.5px; color: var(--muted); margin-bottom: 9px; }
+</style>
+</head>
+<body>
+
+<h1>Admin</h1>
+<div class="sub">Register buses, define routes, and watch what the system rejects.</div>
+
+<div class="grid">
+
+  <!-- ---------------------------------------------------------------- -->
+  <div class="card">
+    <h2>Register a bus</h2>
+    <label for="newBusId">Bus ID</label>
+    <input type="text" id="newBusId" placeholder="NGL-01" autocomplete="off">
+
+    <label for="newLabel">Label shown to riders</label>
+    <input type="text" id="newLabel" placeholder="Vadasery – Junction" autocomplete="off">
+
+    <label for="newRoute">Route</label>
+    <select id="newRoute"><option value="">No route yet (recording)</option></select>
+
+    <div class="actions">
+      <button class="primary" id="registerBtn">Register</button>
+      <button id="refreshBusesBtn">Refresh</button>
+    </div>
+
+    <div id="qrBox">
+      <div class="who" id="qrWho"></div>
+      <img id="qrImg" alt="QR code linking to the driver page" width="190" height="190">
+      <div class="hint">The driver scans this to open their page already signed in.</div>
+      <a id="qrLink" href="#" target="_blank" rel="noopener"></a>
+    </div>
+
+    <div class="note">
+      The key in that link is this bus's signing secret. Treat it like a
+      password: anyone holding it can report positions as this bus.
+    </div>
+  </div>
+
+  <!-- ---------------------------------------------------------------- -->
+  <div class="card">
+    <h2>Registered buses</h2>
+    <div id="busTable"><div class="empty">Loading…</div></div>
+  </div>
+
+  <!-- ---------------------------------------------------------------- -->
+  <div class="card wide">
+    <h2>Routes</h2>
+    <div class="drawhint">
+      Click the map to place points along a route, then save it. For anything
+      you intend to rely on, record the route instead: drive it once with the
+      driver page in record mode and promote the trace below.
+    </div>
+
+    <div class="grid" style="grid-template-columns: 1fr 300px; gap: 14px">
+      <div id="map"></div>
+      <div>
+        <label for="drawRouteId">Route ID</label>
+        <input type="text" id="drawRouteId" placeholder="NGL-04" autocomplete="off">
+
+        <label for="drawName">Name</label>
+        <input type="text" id="drawName" placeholder="Kottar – Suchindram" autocomplete="off">
+
+        <div class="actions" style="margin-bottom:12px">
+          <button class="primary" id="saveRouteBtn" disabled>Save route</button>
+          <button id="undoPointBtn" class="small">Undo point</button>
+          <button id="clearPointsBtn" class="small">Clear</button>
+        </div>
+        <div class="muted" id="drawStatus" style="font-size:12.5px">No points placed.</div>
+
+        <hr style="border:0;border-top:1px solid var(--border);margin:14px 0">
+
+        <h2 style="font-size:13.5px">Promote a recorded trace</h2>
+        <label for="traceBus">Bus that recorded it</label>
+        <select id="traceBus"><option value="">Select a bus…</option></select>
+        <button id="loadTraceBtn" class="small">Load trace onto the map</button>
+        <div class="muted" id="traceStatus" style="font-size:12.5px;margin-top:8px"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ---------------------------------------------------------------- -->
+  <div class="card wide">
+    <h2>Rejected reports</h2>
+    <div class="sub" style="margin-bottom:10px">
+      Position reports the system refused. This is the evidence that the
+      plausibility checks are doing something, rather than being described in a
+      document and never run.
+    </div>
+    <div id="rejectTable"><div class="empty">Loading…</div></div>
+  </div>
+
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/maplibre-gl/4.7.1/maplibre-gl.min.js"></script>
+<script src="js/config.js"></script>
+<script src="js/api.js"></script>
+<script>
+const ADMIN_KEY = new URLSearchParams(location.search).get("key")
+  || (() => { try { return localStorage.getItem("bustrack.adminKey") || ""; } catch (e) { return ""; } })();
+if (ADMIN_KEY) { try { localStorage.setItem("bustrack.adminKey", ADMIN_KEY); } catch (e) {} }
+
+function adminHeaders() {
+  return ADMIN_KEY ? { "X-Admin-Key": ADMIN_KEY } : {};
+}
+
+function escapeHtml(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => (
+    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
+  ));
+}
+
+// -------------------------------------------------------------------------
+// Map and route drawing
+// -------------------------------------------------------------------------
+
+const map = new maplibregl.Map({
+  container: "map",
+  style: osmStyle(),
+  center: CFG.defaultCenter,
+  zoom: CFG.defaultZoom,
+});
+map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
+
+let drawnPoints = [];   // [lat, lon]
+let pointMarkers = [];
+
+function refreshDrawing() {
+  const geojson = {
+    type: "FeatureCollection",
+    features: drawnPoints.length >= 2
+      ? [{ type: "Feature", properties: {},
+           geometry: { type: "LineString", coordinates: drawnPoints.map(([lat, lon]) => [lon, lat]) } }]
+      : [],
+  };
+
+  if (map.getSource("draw")) {
+    map.getSource("draw").setData(geojson);
+  } else if (map.isStyleLoaded()) {
+    map.addSource("draw", { type: "geojson", data: geojson });
+    map.addLayer({
+      id: "draw-line", type: "line", source: "draw",
+      paint: { "line-color": "#dc2626", "line-width": 3.5, "line-dasharray": [2, 1.5] },
+    });
+  }
+
+  pointMarkers.forEach((m) => m.remove());
+  pointMarkers = drawnPoints.map(([lat, lon], i) => {
+    const el = document.createElement("div");
+    el.style.cssText =
+      "width:11px;height:11px;border-radius:50%;background:#dc2626;border:2px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,.4)";
+    el.title = `Point ${i + 1}`;
+    return new maplibregl.Marker({ element: el }).setLngLat([lon, lat]).addTo(map);
+  });
+
+  document.getElementById("saveRouteBtn").disabled = drawnPoints.length < 2;
+  document.getElementById("drawStatus").textContent =
+    drawnPoints.length === 0 ? "No points placed."
+      : `${drawnPoints.length} point${drawnPoints.length === 1 ? "" : "s"} placed.`;
+}
+
+map.on("click", (e) => {
+  drawnPoints.push([e.lngLat.lat, e.lngLat.lng]);
+  refreshDrawing();
+});
+
+map.on("load", () => {
+  refreshDrawing();
+  drawExistingRoutes();
+});
+
+async function drawExistingRoutes() {
+  try {
+    const data = await apiGet("/routes", { city: CFG.city });
+    const features = data.routes.filter((r) => r.polyline).map((r) => ({
+      type: "Feature", properties: { name: r.name },
+      geometry: { type: "LineString", coordinates: decodePolyline(r.polyline) },
+    }));
+    const geojson = { type: "FeatureCollection", features };
+
+    if (map.getSource("existing")) {
+      map.getSource("existing").setData(geojson);
+    } else {
+      map.addSource("existing", { type: "geojson", data: geojson });
+      map.addLayer({
+        id: "existing-line", type: "line", source: "existing",
+        paint: { "line-color": "#1d4ed8", "line-width": 3, "line-opacity": 0.55 },
+      }, "draw-line");
+    }
+  } catch (err) { console.error(err); }
+}
+
+document.getElementById("undoPointBtn").addEventListener("click", () => {
+  drawnPoints.pop(); refreshDrawing();
+});
+document.getElementById("clearPointsBtn").addEventListener("click", () => {
+  drawnPoints = []; refreshDrawing();
+  document.getElementById("traceStatus").textContent = "";
+});
+
+document.getElementById("saveRouteBtn").addEventListener("click", async () => {
+  const routeId = document.getElementById("drawRouteId").value.trim();
+  const name = document.getElementById("drawName").value.trim();
+  if (!routeId) { alert("Give the route an ID."); return; }
+
+  try {
+    const result = await apiPost("/manage/routes", {
+      routeId, name: name || routeId, city: CFG.city,
+      polyline: encodePolyline(drawnPoints),
+      source: "hand-drawn",
+    }, adminHeaders());
+    document.getElementById("drawStatus").textContent =
+      `Saved ${result.routeId}: ${result.vertices} points, ${(result.lengthM / 1000).toFixed(1)} km.`;
+    drawnPoints = []; refreshDrawing();
+    await Promise.all([loadRoutesInto(), drawExistingRoutes()]);
+  } catch (err) {
+    alert(`Could not save the route: ${err.message}`);
+  }
+});
+
+// -------------------------------------------------------------------------
+// Recorded traces
+// -------------------------------------------------------------------------
+
+document.getElementById("loadTraceBtn").addEventListener("click", async () => {
+  const busId = document.getElementById("traceBus").value;
+  const status = document.getElementById("traceStatus");
+  if (!busId) { status.textContent = "Pick a bus first."; return; }
+
+  status.textContent = "Loading…";
+  try {
+    const url = apiUrl(`/manage/trace/${encodeURIComponent(busId)}`, { limit: 2000 });
+    const res = await fetch(url, { headers: adminHeaders() });
+    if (!res.ok) throw new Error(`server returned ${res.status}`);
+    const trace = await res.json();
+
+    if (!trace.points || trace.points.length < 2) {
+      status.textContent = "That bus has no recorded trace today.";
+      return;
+    }
+
+    drawnPoints = trace.points.map((p) => [p[0], p[1]]);
+    refreshDrawing();
+
+    const bounds = new maplibregl.LngLatBounds();
+    drawnPoints.forEach(([lat, lon]) => bounds.extend([lon, lat]));
+    map.fitBounds(bounds, { padding: 40, duration: 600 });
+
+    status.textContent =
+      `Loaded ${trace.count} points (${(trace.lengthM / 1000).toFixed(1)} km). ` +
+      `Give it an ID and save it as a route.`;
+  } catch (err) {
+    status.textContent = `Could not load the trace: ${err.message}`;
+  }
+});
+
+// -------------------------------------------------------------------------
+// Buses
+// -------------------------------------------------------------------------
+
+async function loadRoutesInto() {
+  const data = await apiGet("/routes", { city: CFG.city, geometry: "0" });
+  const select = document.getElementById("newRoute");
+  const current = select.value;
+  select.innerHTML = '<option value="">No route yet (recording)</option>';
+  data.routes.forEach((r) => {
+    const opt = document.createElement("option");
+    opt.value = r.routeId;
+    opt.textContent = `${r.routeId} — ${r.name}`;
+    select.appendChild(opt);
+  });
+  select.value = current;
+}
+
+function driverUrl(busId, secret) {
+  const base = location.href.replace(/admin\.html.*$/, "driver.html");
+  return `${base}#bus=${encodeURIComponent(busId)}&key=${encodeURIComponent(secret)}`;
+}
+
+function showQr(busId, label, secret) {
+  const url = driverUrl(busId, secret);
+  document.getElementById("qrWho").textContent = `${label || busId}`;
+  // Rendered by an external service so the page needs no QR library. The URL
+  // (and therefore the key) is sent to that service -- fine for a classroom
+  // demo, but generate these offline before any real deployment.
+  document.getElementById("qrImg").src =
+    "https://api.qrserver.com/v1/create-qr-code/?size=190x190&data=" + encodeURIComponent(url);
+  const link = document.getElementById("qrLink");
+  link.href = url;
+  link.textContent = "Open the driver page directly";
+  document.getElementById("qrBox").style.display = "block";
+}
+
+async function loadBuses() {
+  const box = document.getElementById("busTable");
+  try {
+    const res = await fetch(apiUrl("/manage/buses"), { headers: adminHeaders() });
+    if (res.status === 401) {
+      box.innerHTML = '<div class="empty">Admin key required. Open this page as ' +
+        '<code>admin.html?key=YOUR_KEY</code>.</div>';
+      return;
+    }
+    const data = await res.json();
+
+    if (!data.buses.length) {
+      box.innerHTML = '<div class="empty">No buses registered yet.</div>';
+      return;
+    }
+
+    const traceSelect = document.getElementById("traceBus");
+    traceSelect.innerHTML = '<option value="">Select a bus…</option>';
+
+    box.innerHTML = `<table><thead><tr>
+        <th>Bus</th><th>Route</th><th></th>
+      </tr></thead><tbody>${data.buses.map((b) => `
+        <tr>
+          <td>
+            <div><b>${escapeHtml(b.label || b.busId)}</b>
+              ${b.isSimulated ? '<span class="tag sim">SIM</span>' : ""}</div>
+            <code>${escapeHtml(b.busId)}</code>
+          </td>
+          <td class="muted">${escapeHtml(b.routeId || "—")}</td>
+          <td style="text-align:right;white-space:nowrap">
+            <button class="link" data-qr="${escapeHtml(b.busId)}">QR</button>
+            <button class="link" data-del="${escapeHtml(b.busId)}">Delete</button>
+          </td>
+        </tr>`).join("")}</tbody></table>`;
+
+    data.buses.forEach((b) => {
+      const opt = document.createElement("option");
+      opt.value = b.busId;
+      opt.textContent = b.label || b.busId;
+      traceSelect.appendChild(opt);
+    });
+
+    box.querySelectorAll("[data-qr]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const bus = data.buses.find((x) => x.busId === btn.dataset.qr);
+        showQr(bus.busId, bus.label, bus.secret);
+        document.getElementById("qrBox").scrollIntoView({ behavior: "smooth", block: "nearest" });
+      });
+    });
+
+    box.querySelectorAll("[data-del]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const busId = btn.dataset.del;
+        if (!confirm(`Delete ${busId}? Its key stops working immediately.`)) return;
+        await fetch(apiUrl(`/manage/buses/${encodeURIComponent(busId)}`), {
+          method: "DELETE", headers: adminHeaders(),
+        });
+        loadBuses();
+      });
+    });
+  } catch (err) {
+    box.innerHTML = `<div class="empty">Could not load buses: ${escapeHtml(err.message)}</div>`;
+  }
+}
+
+document.getElementById("registerBtn").addEventListener("click", async () => {
+  const busId = document.getElementById("newBusId").value.trim();
+  if (!busId) { alert("Give the bus an ID."); return; }
+
+  try {
+    const result = await apiPost("/manage/buses", {
+      busId,
+      label: document.getElementById("newLabel").value.trim() || busId,
+      routeId: document.getElementById("newRoute").value,
+    }, adminHeaders());
+
+    showQr(result.busId, result.label, result.secret);
+    document.getElementById("newBusId").value = "";
+    document.getElementById("newLabel").value = "";
+    loadBuses();
+  } catch (err) {
+    alert(`Could not register: ${err.message}`);
+  }
+});
+
+document.getElementById("refreshBusesBtn").addEventListener("click", loadBuses);
+
+// -------------------------------------------------------------------------
+// Reject log
+// -------------------------------------------------------------------------
+
+async function loadRejections() {
+  const box = document.getElementById("rejectTable");
+  try {
+    const data = await apiGet("/rejections", { limit: 60 });
+    if (!data.rejections.length) {
+      box.innerHTML = '<div class="empty">Nothing rejected today.</div>';
+      return;
+    }
+    box.innerHTML = `<table><thead><tr>
+        <th>When</th><th>Bus</th><th>Reason</th><th>Detail</th>
+      </tr></thead><tbody>${data.rejections.map((r) => {
+        const when = new Date(r.ts * 1000).toLocaleTimeString([], {
+          hour: "2-digit", minute: "2-digit", second: "2-digit",
+        });
+        return `<tr>
+          <td class="muted">${when}</td>
+          <td><code>${escapeHtml(r.busId)}</code></td>
+          <td class="reason ${escapeHtml(r.reason)}">${escapeHtml(r.reason)}</td>
+          <td class="muted">${escapeHtml(r.detail || "")}</td>
+        </tr>`;
+      }).join("")}</tbody></table>`;
+  } catch (err) {
+    box.innerHTML = `<div class="empty">Could not load: ${escapeHtml(err.message)}</div>`;
+  }
+}
+
+// -------------------------------------------------------------------------
+
+loadRoutesInto();
+loadBuses();
+loadRejections();
+setInterval(loadRejections, 5000);
+</script>
+</body>
+</html>

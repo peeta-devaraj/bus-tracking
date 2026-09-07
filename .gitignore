@@ -1,0 +1,10 @@
+.venv/
+.venv*/
+__pycache__/
+*.pyc
+.pytest_cache/
+.azurite/
+api/local.settings.json
+data/
+*.zip
+.DS_Store
