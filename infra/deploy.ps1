@@ -144,10 +144,23 @@ az functionapp config appsettings set `
 Note "Admin key generated. It is printed at the end -- save it."
 
 Step "Allowing the web app to call the API (CORS)"
-az functionapp cors add --name $functionApp --resource-group $ResourceGroup `
-    --allowed-origins "https://$staticWebApp.azurestaticapps.net" --output none 2>$null
-az functionapp cors add --name $functionApp --resource-group $ResourceGroup `
-    --allowed-origins "http://localhost:5500" --output none 2>$null
+
+# Static Web Apps does NOT get "<name>.azurestaticapps.net". Azure generates a
+# random hostname like "zealous-meadow-0a54d1100.3.azurestaticapps.net", so the
+# real value has to be read back or CORS silently blocks every request from the
+# actual site.
+$webHost = az staticwebapp show --name $staticWebApp --resource-group $ResourceGroup `
+    --query "defaultHostname" -o tsv
+Note "Web hostname: $webHost"
+
+$existingCors = az functionapp cors show --name $functionApp --resource-group $ResourceGroup `
+    --query "allowedOrigins" -o tsv
+foreach ($origin in @("https://$webHost", "http://localhost:5500")) {
+    if ($existingCors -notcontains $origin) {
+        az functionapp cors add --name $functionApp --resource-group $ResourceGroup `
+            --allowed-origins $origin --output none 2>$null
+    }
+}
 
 # --------------------------------------------------------------------------
 Step "Deploying the API"
@@ -159,28 +172,33 @@ try {
 }
 
 # --------------------------------------------------------------------------
-Step "Pointing the web pages at the deployed API"
+Step "Building the web pages against the deployed API"
 
-$apiBase = "https://$functionApp.azurewebsites.net/api"
-$configPath = Join-Path $root "web\js\config.js"
-$original = Get-Content $configPath -Raw
-$deployed = $original -replace 'apiBase: "[^"]*"', "apiBase: `"$apiBase`""
-$deployed | Set-Content $configPath -Encoding utf8
+# Build into a temp copy rather than editing web/js/config.js in place. An
+# earlier version rewrote the file and restored it afterwards, which left the
+# repo holding a deployed URL whenever the deploy was interrupted. The working
+# tree should never depend on a deploy finishing cleanly.
+$apiBase  = "https://$functionApp.azurewebsites.net/api"
+$buildDir = Join-Path ([IO.Path]::GetTempPath()) "bustrack-build-$(Get-Random)"
+
+Copy-Item (Join-Path $root "web") $buildDir -Recurse -Force
+$configPath = Join-Path $buildDir "js\config.js"
+(Get-Content $configPath -Raw) -replace 'apiBase: "[^"]*"', "apiBase: `"$apiBase`"" |
+    Set-Content $configPath -Encoding utf8
+Note "API base baked in: $apiBase"
 
 Step "Deploying the web pages"
 try {
     $token = az staticwebapp secrets list --name $staticWebApp --resource-group $ResourceGroup `
         --query "properties.apiKey" -o tsv
-    npx --yes @azure/static-web-apps-cli deploy (Join-Path $root "web") `
+    npx --yes @azure/static-web-apps-cli deploy $buildDir `
         --deployment-token $token --env production
 } finally {
-    # Restore the local default so the repo keeps working against localhost.
-    $original | Set-Content $configPath -Encoding utf8
+    Remove-Item $buildDir -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 # --------------------------------------------------------------------------
-$webUrl = az staticwebapp show --name $staticWebApp --resource-group $ResourceGroup `
-    --query "defaultHostname" -o tsv
+$webUrl = $webHost
 
 Write-Host "`n----------------------------------------------------------" -ForegroundColor Green
 Write-Host " Deployed" -ForegroundColor Green

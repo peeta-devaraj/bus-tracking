@@ -371,6 +371,38 @@ def get_stop(stop_id: str, city: str = "nagercoil") -> dict[str, Any] | None:
     return entity
 
 
+def batch_upsert_routes(routes: list[dict[str, Any]], city: str) -> int:
+    """Bulk route insert for the GTFS importer.
+
+    Same 100-operation, single-partition batch limit as stops. Since every
+    route in one import belongs to one city, the partition constraint is
+    satisfied for free.
+    """
+    written = 0
+    client = table(T_ROUTES)
+    for i in range(0, len(routes), 100):
+        chunk = routes[i : i + 100]
+        operations = [
+            (
+                "upsert",
+                {
+                    "PartitionKey": city,
+                    "RowKey": r["routeId"],
+                    "routeId": r["routeId"],
+                    "name": r["name"],
+                    "polyline": r["polyline"],
+                    "stopIds": json.dumps(r.get("stopIds", [])),
+                    "source": r.get("source", "gtfs"),
+                    "updatedAt": time.time(),
+                },
+            )
+            for r in chunk
+        ]
+        client.submit_transaction(operations)
+        written += len(chunk)
+    return written
+
+
 def batch_upsert_stops(stops: list[dict[str, Any]], city: str) -> int:
     """Bulk stop insert for the GTFS importer.
 

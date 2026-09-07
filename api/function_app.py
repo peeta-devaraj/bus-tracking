@@ -275,16 +275,29 @@ def routes(req: func.HttpRequest) -> func.HttpResponse:
     city = req.params.get("city")
     include_geometry = req.params.get("geometry", "1") != "0"
 
+    # Asking for one route by id returns just that route, with geometry. This
+    # is what lets a client holding a 4,000-route city fetch the single
+    # polyline it is about to draw instead of all of them.
+    wanted = req.params.get("routeId")
+
+    # stopIds is long (up to 200 per route) and no caller needs it just to
+    # populate a menu, so it is opt-in. On the imported Chennai network,
+    # leaving it out is the difference between a 1.2 MB list and a 0.2 MB one.
+    include_stops = req.params.get("detail") == "1"
+
     out = []
     for r in storage.list_routes(city):
+        if wanted and r["routeId"] != wanted:
+            continue
         entry = {
             "routeId": r["routeId"],
             "name": r.get("name") or r["routeId"],
             "city": r["PartitionKey"],
             "source": r.get("source", "manual"),
-            "stopIds": r.get("stopIds", []),
         }
-        if include_geometry:
+        if include_stops:
+            entry["stopIds"] = r.get("stopIds", [])
+        if include_geometry or wanted:
             entry["polyline"] = r.get("polyline", "")
         out.append(entry)
 

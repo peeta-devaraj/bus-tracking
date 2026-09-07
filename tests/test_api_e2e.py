@@ -307,6 +307,39 @@ class TestReadEndpoints:
         ).json()
         assert all("polyline" not in r for r in body["routes"])
 
+    def test_stop_ids_are_opt_in(self, route_id):
+        """A menu does not need stop lists, and on an imported city network
+        they dominate the payload."""
+        lean = requests.get(
+            f"{API}/routes", params={"city": "testcity", "geometry": "0"}, timeout=10
+        ).json()
+        assert all("stopIds" not in r for r in lean["routes"])
+
+        detailed = requests.get(
+            f"{API}/routes",
+            params={"city": "testcity", "geometry": "0", "detail": "1"},
+            timeout=10,
+        ).json()
+        assert all("stopIds" in r for r in detailed["routes"])
+
+    def test_a_single_route_can_be_fetched_with_geometry(self, route_id):
+        """Lets a client holding thousands of routes fetch just the one it is
+        about to draw."""
+        body = requests.get(
+            f"{API}/routes", params={"city": "testcity", "routeId": route_id}, timeout=10
+        ).json()
+        assert body["count"] == 1
+        assert body["routes"][0]["routeId"] == route_id
+        # Geometry comes back even though geometry=1 was not passed, because
+        # asking for one route by id can only mean you want to draw it.
+        assert body["routes"][0]["polyline"]
+
+    def test_an_unknown_route_id_returns_nothing(self):
+        body = requests.get(
+            f"{API}/routes", params={"city": "testcity", "routeId": "no-such-route"}, timeout=10
+        ).json()
+        assert body["count"] == 0
+
     def test_live_accepts_a_bounding_box(self, bus, route_id):
         bus_id, secret = bus
         post_ping(bus_id, secret)

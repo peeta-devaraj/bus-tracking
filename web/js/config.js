@@ -1,4 +1,4 @@
-// Where the API lives.
+﻿// Where the API lives.
 //
 // Local development talks to the Functions host on :7071. Once deployed, the
 // pages are served from Azure Static Web Apps and the API sits on its own
@@ -23,3 +23,4 @@ window.BUSTRACK_CONFIG = {
 };
 
 // Deployment writes config.local.js to override the above.
+
