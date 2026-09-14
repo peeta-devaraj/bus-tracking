@@ -28,7 +28,7 @@ param(
     [string]$Prefix       = "bustrack",
     [string]$Location     = "centralindia",
     [string]$ResourceGroup,
-    [int]   $BudgetInr    = 500,
+    [int]   $BudgetInr    = 1000,
     [switch]$CodeOnly,
     [switch]$Destroy
 )
@@ -70,38 +70,62 @@ if (-not $CodeOnly) {
     az group create --name $ResourceGroup --location $Location --output none
 
     # ---- Budget alert BEFORE anything that can cost money -----------------
-    Step "Budget alert at INR $BudgetInr"
-    $budgetJson = @{
-        category      = "Cost"
-        amount        = $BudgetInr
-        timeGrain     = "Monthly"
-        timePeriod    = @{ startDate = (Get-Date -Format "yyyy-MM-01") }
-        notifications = @{
-            fiftyPercent = @{
-                enabled = $true; operator = "GreaterThan"; threshold = 50
-                contactEmails = @((az account show --query user.name -o tsv))
-            }
-            ninetyPercent = @{
-                enabled = $true; operator = "GreaterThan"; threshold = 90
-                contactEmails = @((az account show --query user.name -o tsv))
-            }
+    #
+    # Scoped to the whole SUBSCRIPTION, not this resource group. A group-level
+    # budget only watches this project, and the spend that actually threatens a
+    # student credit is usually some other forgotten resource.
+    #
+    # Created through the REST API because `az consumption budget create`
+    # rejects Azure for Students subscriptions with "Invalid budget
+    # configuration". An earlier version of this step called that command with
+    # 2>$null inside try/catch -- but a failing native command does not throw
+    # in Windows PowerShell, so it printed "Budget created." while creating
+    # nothing. Success is now judged by $LASTEXITCODE and read back.
+    Step "Subscription budget alert at INR $BudgetInr"
+    $subscriptionId = az account show --query id -o tsv
+    $alertEmail     = az account show --query user.name -o tsv
+
+    function BudgetNotification($threshold, $type) {
+        @{
+            enabled       = $true
+            operator      = "GreaterThan"
+            threshold     = $threshold
+            thresholdType = $type
+            contactEmails = @($alertEmail)
+            contactRoles  = @("Owner")
         }
-    } | ConvertTo-Json -Depth 8 -Compress
+    }
 
     $budgetFile = Join-Path $env:TEMP "bustrack-budget.json"
-    $budgetJson | Set-Content -Path $budgetFile -Encoding utf8
-    try {
-        az consumption budget create-with-rg `
-            --resource-group $ResourceGroup --budget-name "$Prefix-budget" `
-            --amount $BudgetInr --category Cost --time-grain Monthly `
-            --start-date (Get-Date -Format "yyyy-MM-01") `
-            --end-date (Get-Date).AddYears(1).ToString("yyyy-MM-01") `
-            --output none 2>$null
-        Note "Budget created."
-    } catch {
-        # Some student subscriptions restrict the Consumption API. Not fatal,
-        # but say so clearly rather than pretending a guardrail exists.
-        Write-Host "    Could not create the budget automatically." -ForegroundColor Yellow
+    @{
+        properties = @{
+            category   = "Cost"
+            amount     = $BudgetInr
+            timeGrain  = "Monthly"
+            timePeriod = @{
+                startDate = (Get-Date -Format "yyyy-MM-01") + "T00:00:00Z"
+                endDate   = (Get-Date).AddYears(1).ToString("yyyy-MM-01") + "T00:00:00Z"
+            }
+            notifications = @{
+                actual_50_percent    = (BudgetNotification 50 "Actual")
+                actual_90_percent    = (BudgetNotification 90 "Actual")
+                forecast_100_percent = (BudgetNotification 100 "Forecasted")
+            }
+        }
+    } | ConvertTo-Json -Depth 10 | Set-Content -Path $budgetFile -Encoding utf8
+
+    # PUT is idempotent, so re-running the script updates rather than duplicates.
+    $budgetUri = "https://management.azure.com/subscriptions/$subscriptionId" +
+                 "/providers/Microsoft.Consumption/budgets/student-credit-guard?api-version=2023-05-01"
+    az rest --method put --uri $budgetUri --body "@$budgetFile" --output none 2>$null
+    $budgetOk = ($LASTEXITCODE -eq 0)
+    Remove-Item $budgetFile -ErrorAction SilentlyContinue
+
+    if ($budgetOk) {
+        Note "Budget 'student-credit-guard' active; alerts go to $alertEmail."
+    } else {
+        # Not fatal, but never pretend a guardrail exists when it does not.
+        Write-Host "    Could NOT create the budget. No spending alert is in place." -ForegroundColor Yellow
         Write-Host "    Set one by hand: portal.azure.com > Cost Management > Budgets" -ForegroundColor Yellow
     }
 
