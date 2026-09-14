@@ -28,7 +28,13 @@ function Stop-Stack {
         Stop-Process -Force -ErrorAction SilentlyContinue
     Get-Process func -ErrorAction SilentlyContinue | Stop-Process -Force
     Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" -ErrorAction SilentlyContinue |
-        Where-Object { $_.CommandLine -like "*azurite*" -or $_.CommandLine -like "*serve-web*" } |
+        Where-Object { $_.CommandLine -like "*azurite*" } |
+        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    # The pages are served by Python's http.server from this project's venv.
+    # An earlier version looked only for a Node server that no longer exists,
+    # so the web server was never stopped and every start added another one.
+    Get-CimInstance Win32_Process -Filter "Name = 'python.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -like "*http.server*" -and $_.CommandLine -like "*$venv*" } |
         ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
     Write-Host "Stopped." -ForegroundColor Yellow
 }
@@ -111,14 +117,26 @@ if (-not $apiUp) {
 Write-Host "  API ready:  http://localhost:$ApiPort/api/health" -ForegroundColor Green
 
 # --- Web ----------------------------------------------------------------
-Write-Host "Starting web server on :$WebPort..." -ForegroundColor Cyan
-Start-Process -FilePath "$venv\Scripts\python.exe" `
-    -ArgumentList "-m","http.server","$WebPort","--bind","0.0.0.0" `
-    -WorkingDirectory (Join-Path $root "web") `
-    -RedirectStandardOutput "$logs\web.out.log" `
-    -RedirectStandardError  "$logs\web.err.log" `
-    -WindowStyle Hidden
-Start-Sleep -Seconds 2
+# Static pages do not change between restarts, so an already-running server is
+# reused. Starting one unconditionally piled up a new process on every run.
+$webUp = $false
+try {
+    $c = New-Object Net.Sockets.TcpClient
+    $c.Connect("127.0.0.1", $WebPort); $c.Close(); $webUp = $true
+} catch { }
+
+if ($webUp) {
+    Write-Host "Web server already running on :$WebPort" -ForegroundColor DarkGray
+} else {
+    Write-Host "Starting web server on :$WebPort..." -ForegroundColor Cyan
+    Start-Process -FilePath "$venv\Scripts\python.exe" `
+        -ArgumentList "-m","http.server","$WebPort","--bind","0.0.0.0" `
+        -WorkingDirectory (Join-Path $root "web") `
+        -RedirectStandardOutput "$logs\web.out.log" `
+        -RedirectStandardError  "$logs\web.err.log" `
+        -WindowStyle Hidden
+    Start-Sleep -Seconds 2
+}
 
 $lan = (Get-NetIPAddress -AddressFamily IPv4 |
         Where-Object { $_.IPAddress -notlike "127.*" -and $_.IPAddress -notlike "169.254.*" } |
