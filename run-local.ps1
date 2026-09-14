@@ -44,6 +44,17 @@ if (-not (Test-Path $venv)) {
 
 New-Item -ItemType Directory -Force -Path $logs | Out-Null
 
+# npm installs three shims per tool: azurite.ps1, azurite.cmd and a bare
+# "azurite" for Git Bash. Plain Get-Command returns the .ps1 first, which
+# Start-Process cannot launch ("%1 is not a valid Win32 application"). Ask for
+# a real executable instead, preferring the .cmd/.exe forms Windows can start.
+function Resolve-Launchable([string]$name) {
+    $apps = @(Get-Command $name -CommandType Application -All -ErrorAction SilentlyContinue)
+    $preferred = $apps | Where-Object { $_.Source -match '\.(exe|cmd|bat)$' } | Select-Object -First 1
+    if ($preferred) { return $preferred.Source }
+    return $null
+}
+
 # --- Storage emulator ---------------------------------------------------
 $azuriteUp = $false
 try {
@@ -55,9 +66,9 @@ if ($azuriteUp) {
     Write-Host "Azurite already running on 10002" -ForegroundColor DarkGray
 } else {
     Write-Host "Starting Azurite..." -ForegroundColor Cyan
-    $azurite = (Get-Command azurite -ErrorAction SilentlyContinue)
+    $azurite = Resolve-Launchable "azurite"
     if (-not $azurite) { throw "Azurite is not installed. Run: npm install -g azurite" }
-    Start-Process -FilePath $azurite.Source `
+    Start-Process -FilePath $azurite `
         -ArgumentList "--silent","--location","$logs","--tableHost","127.0.0.1" `
         -RedirectStandardOutput "$logs\azurite.out.log" `
         -RedirectStandardError  "$logs\azurite.err.log" `
@@ -75,7 +86,9 @@ $env:VIRTUAL_ENV = $venv
 $env:PATH = "$venv\Scripts;$env:PATH"
 
 Write-Host "Starting Functions host on :$ApiPort..." -ForegroundColor Cyan
-Start-Process -FilePath (Get-Command func).Source `
+$func = Resolve-Launchable "func"
+if (-not $func) { throw "Azure Functions Core Tools not found. Install v4: npm install -g azure-functions-core-tools@4" }
+Start-Process -FilePath $func `
     -ArgumentList "start","--port","$ApiPort" `
     -WorkingDirectory (Join-Path $root "api") `
     -RedirectStandardOutput "$logs\func.out.log" `
