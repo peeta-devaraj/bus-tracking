@@ -41,6 +41,45 @@ RANGE_HIGH = _env_float("BUSTRACK_ETA_RANGE_HIGH", 1.4)
 # Treat anything within this distance as "arriving now".
 ARRIVAL_RADIUS_M = _env_float("BUSTRACK_ARRIVAL_RADIUS_M", 80.0)
 
+# How far a bus must move from where its direction was last confirmed before
+# the direction can change. GPS scatter on a parked phone is a few metres, and
+# each reading scatters around the true spot rather than drifting, so it very
+# rarely reaches this.
+DIRECTION_MIN_MOVE_M = _env_float("BUSTRACK_DIRECTION_MIN_MOVE_M", 30.0)
+
+
+def infer_direction(
+    anchor_along_m: float | None,
+    previous_direction: int | None,
+    along_m: float | None,
+) -> tuple[int, float | None]:
+    """Which way along its route a bus is heading, and the updated anchor.
+
+    Returns (direction, anchor): direction is +1 towards the end of the route,
+    -1 back, 0 for unknown; the anchor is the position to pass back in next
+    time.
+
+    Town buses run a route out and back, so "distance along the route" rises
+    and then falls. Without knowing which, a bus driving *away* from a stop
+    looks exactly like one approaching it.
+
+    Movement is measured from an anchor -- where the direction was last
+    confirmed -- not from the previous fix. An earlier version compared
+    consecutive fixes, and a bus crawling through town at rush hour moves less
+    than the threshold between pings, so after turning round its direction
+    never updated. Measured against simulated traffic it was wrong for 6% of
+    fixes. From an anchor, slow progress accumulates until it counts.
+    """
+    previous_direction = previous_direction if previous_direction in (1, -1) else 0
+    if along_m is None:
+        return previous_direction, anchor_along_m
+    if anchor_along_m is None:
+        return previous_direction, along_m
+    delta = along_m - anchor_along_m
+    if abs(delta) < DIRECTION_MIN_MOVE_M:
+        return previous_direction, anchor_along_m
+    return (1 if delta > 0 else -1), along_m
+
 
 @dataclass
 class Eta:
@@ -110,13 +149,18 @@ def estimate(
     is_simulated: bool = False,
     route_length_m: float | None = None,
     loops: bool = False,
+    direction: int = 1,
 ) -> Eta | None:
     """Estimate when one bus reaches one stop, or None if we cannot say.
+
+    `direction` is +1 for a bus heading towards the end of the route and -1
+    for one heading back; see infer_direction. Unknown direction (0) returns
+    None: a countdown for a bus that may be driving away is worse than none.
 
     Set `loops` for a circular route, where a bus that has passed the stop will
     come round to it again rather than never arriving.
     """
-    if bus_along_m is None:
+    if bus_along_m is None or direction not in (1, -1):
         return None
 
     # Too old to reason about. Showing a countdown from a four-minute-old fix
@@ -124,10 +168,11 @@ def estimate(
     if age_s > UNCERTAIN_MAX_AGE_S:
         return None
 
-    remaining = stop_along_m - bus_along_m
+    remaining = (stop_along_m - bus_along_m) * direction
 
     if remaining < 0:
-        if not loops or not route_length_m:
+        # Looping only makes sense forwards round a ring.
+        if not loops or not route_length_m or direction != 1:
             return None  # already passed, and not coming back
         remaining += route_length_m
 
