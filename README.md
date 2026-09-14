@@ -198,13 +198,36 @@ up to 1.45 km out and visited one route's stops in the wrong order.
 
 ## Arrival estimates
 
-Remaining distance along the route divided by a speed estimate, reported as a
-**range** ("6–11 min"), never a single number. The response says which speed it
-used — `reported`, `average`, or `default` — so the interface can explain why an
-estimate is weak instead of just showing a wide window.
+Always a **range** ("6–11 min"), never a single number, and **nothing** when the
+bus has passed the stop, is heading the other way, or its position is too stale
+to reason about. Refusing to answer beats inventing a number.
 
-It returns **nothing** when the bus has already passed the stop or its position
-is too stale to reason about. Refusing to answer beats inventing a number.
+**Direction comes first.** Buses run out and back, so a bus's distance along the
+route rises and then falls. Ingest works out which way each bus is heading, and
+no countdown is given until it knows: before this, a bus driving *away* from a
+stop on its return leg could be shown as approaching it.
+
+**Two ways to estimate, and every answer says which it used** (`method`):
+
+- `speed` — remaining distance over the bus's reported speed, its recent
+  average, or a default.
+- `learned` — travel time per 200 m of road, per direction, per time of day,
+  learned from stored history (`api/shared/learned_eta.py`). Time spent at stops
+  is learned automatically. Models retrain nightly, or on demand with
+  `POST /api/manage/learn`.
+
+A learned estimate also carries **`trainedOn`**: `simulated`, `real` or `mixed`.
+The rider map shows *"Learned from simulated trips, not real traffic"* whenever
+it is not `real`. Nobody has recorded real buses in Nagercoil, so to have
+anything to learn from, `tools/backfill_history.py` writes clearly labelled
+simulated history.
+
+**Does learning help?** On simulated traffic, yes — see
+[docs/eta-evaluation.md](docs/eta-evaluation.md), which leads with the fact that
+every trip in it is simulated. Knowing where and when the road is slow cut
+average error by 35–44% beyond a plain average pace, and by about 0% on a control
+with no such structure. The same evaluation found that the `speed` method is
+optimistic on *any* traffic, because it ignores time spent stopped.
 
 ## Tests
 
@@ -212,11 +235,13 @@ is too stale to reason about. Refusing to answer beats inventing a number.
 .venv/Scripts/python.exe -m pytest tests/ -q
 ```
 
-133 tests. Geometry and validation are pure unit tests;
+192 tests. Geometry, validation and the learned model are pure unit tests;
 `test_route_data.py` checks the committed Nagercoil routes offline (stops on
 their lines, in travel order, no side-lane detours); storage tests run against
 Azurite; `test_api_e2e.py` drives the real HTTP surface with real HMAC signing
-and **skips itself** if nothing is listening.
+and **skips itself** if nothing is listening. `test_eta_evaluation.py`
+re-derives the evaluation's conclusions on a smaller simulation, including the
+control, so a change that breaks them fails rather than leaving a stale report.
 
 `tests/test_api_e2e.py::TestIngestRejects` is the demo script in executable
 form — teleporting to Chennai, replaying an old timestamp, tampering with a
@@ -249,8 +274,9 @@ api/            Azure Functions app
   function_app.py     HTTP + timer triggers
   shared/             geo, auth, validation, eta, storage
 web/            rider, driver, admin pages
-tools/          simulator, Nagercoil seed, GTFS importer
+tools/          simulator, OSM route builder, seed, GTFS importer,
+                traffic model, ETA evaluation, simulated-history backfill
 infra/          deploy.ps1
 tests/          unit, storage, and end-to-end suites
-docs/           architecture, threat model
+docs/           architecture, threat model, ETA evaluation
 ```

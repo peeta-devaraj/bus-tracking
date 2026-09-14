@@ -9,9 +9,19 @@ Every bus it creates is registered with isSimulated=true, which the API carries
 through to the map so simulated buses are visibly labelled. Do not remove that:
 a tracking demo that cannot tell you which dots are real is worthless.
 
+Traffic
+-------
+For routes in tools/data/nagercoil_routes.json the buses drive the traffic
+model in tools/traffic.py by default: slower on town streets, slower at rush
+hour, waiting at stops. That matters beyond looks: every accepted ping becomes
+history, and history is what the travel-time model learns from. A flat-speed
+bus would teach it that Kottar at 8 a.m. is as quick as the highway at noon.
+`--flat` restores the old constant-speed behaviour.
+
 Usage:
     python tools/simulator.py --route NGL-VAD-KKD --buses 3
-    python tools/simulator.py --route NGL-KK --buses 2 --interval 8 --speed 30
+    python tools/simulator.py --route NGL-KK --buses 2 --interval 8
+    python tools/simulator.py --route NGL-KK --flat --speed 30
     python tools/simulator.py --list
 """
 
@@ -19,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import random
 import signal
@@ -38,6 +49,8 @@ from shared.geo import (  # noqa: E402
     point_at_distance,
     route_length_m,
 )
+
+sys.path.insert(0, os.path.dirname(__file__))
 
 # GPS noise in metres, roughly what a phone reports in a moving vehicle.
 GPS_NOISE_M = 6.0
@@ -60,7 +73,15 @@ signal.signal(signal.SIGINT, _stop)
 class SimulatedBus:
     """One bus walking a polyline, out and back, for ever."""
 
-    def __init__(self, bus_id: str, secret: str, route: list, speed_kmh: float, start_frac: float):
+    def __init__(
+        self,
+        bus_id: str,
+        secret: str,
+        route: list,
+        speed_kmh: float,
+        start_frac: float,
+        traffic=None,
+    ):
         self.bus_id = bus_id
         self.secret = secret
         self.route = route
@@ -71,10 +92,41 @@ class SimulatedBus:
         self.dwell_ticks = 0
         self.sent = 0
         self.rejected = 0
+        self.traffic = traffic
+        self.current_speed_kmh = speed_kmh
+        self.trip_factor = math.exp(random.gauss(0, 0.07))
+
+    def _stops_crossed(self, before: float, after: float) -> list:
+        """Stops reached this tick: strictly after where the bus was, up to and
+        including where it is now, in its direction of travel. Counting the
+        stop it just left would make it wait there again, for ever.
+
+        A stop inside the terminus zone behind the bus was already served by
+        the layover there, so it is skipped -- the same double-wait the offline
+        traffic model had at Nagercoil Junction.
+        """
+        from traffic import TERMINUS_STOP_ZONE_M
+
+        crossed = []
+        for st in self.traffic.profile.stops:
+            if self.direction > 0:
+                reached = before < st.along_m <= after
+                behind_terminus = st.along_m <= TERMINUS_STOP_ZONE_M
+            else:
+                reached = after <= st.along_m < before
+                behind_terminus = st.along_m >= self.length_m - TERMINUS_STOP_ZONE_M
+            if reached and not behind_terminus:
+                crossed.append(st)
+        return crossed
 
     def advance(self, seconds: float) -> None:
         if self.dwell_ticks > 0:
             self.dwell_ticks -= 1
+            self.current_speed_kmh = 0.0
+            return
+
+        if self.traffic is not None:
+            self._advance_with_traffic(seconds)
             return
 
         if random.random() < DWELL_CHANCE:
@@ -83,17 +135,43 @@ class SimulatedBus:
 
         # Vary speed a little so every bus does not move in lockstep.
         speed = self.speed_kmh * random.uniform(0.75, 1.15)
+        self.current_speed_kmh = speed
+        self.along_m += self.direction * (speed / 3.6) * seconds
+        self._turn_at_termini()
+
+    def _advance_with_traffic(self, seconds: float) -> None:
+        now = time.time()
+        speed = self.traffic.speed_kmh(self.along_m, now) * self.trip_factor * math.exp(random.gauss(0, 0.12))
+        self.current_speed_kmh = speed
+        before = self.along_m
         self.along_m += self.direction * (speed / 3.6) * seconds
 
-        # Turn round at the termini, the way a town bus actually works.
+        # Wait at any stop driven past this tick, for as many ticks as the
+        # traffic model's dwell asks for.
+        wait_s = sum(self.traffic.dwell_s(st, now) for st in self._stops_crossed(before, self.along_m))
+        # Unscheduled halts: signals, a cow, a lorry unloading.
+        pieces = abs(self.along_m - before) / 100.0
+        if random.random() < 1 - (1 - self.traffic.halt_chance(self.along_m)) ** pieces:
+            wait_s += random.uniform(10.0, 40.0)
+        if wait_s > 0:
+            self.dwell_ticks = max(1, round(wait_s / seconds))
+
+        if self._turn_at_termini():
+            self.trip_factor = math.exp(random.gauss(0, 0.07))
+
+    def _turn_at_termini(self) -> bool:
+        """Turn round at either end, the way a town bus actually works."""
         if self.along_m >= self.length_m:
             self.along_m = self.length_m
             self.direction = -1
             self.dwell_ticks = random.randint(2, 4)
-        elif self.along_m <= 0:
+            return True
+        if self.along_m <= 0:
             self.along_m = 0.0
             self.direction = 1
             self.dwell_ticks = random.randint(2, 4)
+            return True
+        return False
 
     def current_fix(self) -> dict:
         lat, lon = point_at_distance(self.route, self.along_m)
@@ -115,7 +193,7 @@ class SimulatedBus:
             "lon": round(lon, 6),
             "ts": time.time(),
             "accuracy": round(random.uniform(4.0, 18.0), 1),
-            "speed": round(self.speed_kmh / 3.6, 2) if moving else 0.0,
+            "speed": round(self.current_speed_kmh / 3.6, 2) if moving else 0.0,
             "heading": round(heading, 1),
             "nonce": uuid.uuid4().hex[:16],
         }
@@ -184,7 +262,11 @@ def main() -> int:
     parser.add_argument("--admin-key", default=os.environ.get("ADMIN_KEY", ""))
     parser.add_argument("--route", help="routeId to run buses on")
     parser.add_argument("--buses", type=int, default=3)
-    parser.add_argument("--speed", type=float, default=22.0, help="average km/h")
+    parser.add_argument("--speed", type=float, default=22.0, help="average km/h (with --flat)")
+    parser.add_argument(
+        "--flat", action="store_true",
+        help="constant speed with random pauses, instead of the traffic model",
+    )
     parser.add_argument(
         "--interval", type=float, default=10.0,
         help="seconds between pings; the API rejects anything under 5",
@@ -225,7 +307,23 @@ def main() -> int:
     points = densify(decode_polyline(route["polyline"]), max_gap_m=20.0)
     length_km = route_length_m(points) / 1000.0
 
-    print(f"Route {route['routeId']}: {route['name']} ({length_km:.1f} km)")
+    traffic = None
+    if not args.flat:
+        try:
+            from traffic import STRUCTURED, Traffic, load_profile
+
+            profile = load_profile(args.route)
+            # The profile's stop positions are measured along the committed
+            # geometry. If the API holds different geometry for this route
+            # (re-recorded, hand-edited), they would not line up.
+            if abs(profile.length_m - route_length_m(points)) > 25.0:
+                raise ValueError("route geometry differs from tools/data")
+            traffic = Traffic(profile, mode=STRUCTURED, seed=random.randrange(1 << 30))
+        except (StopIteration, ValueError, OSError) as exc:
+            print(f"No traffic profile for {args.route} ({exc}); driving at a flat {args.speed:.0f} km/h")
+
+    print(f"Route {route['routeId']}: {route['name']} ({length_km:.1f} km)"
+          + ("  [traffic model]" if traffic else "  [flat speed]"))
     print(f"Registering {args.buses} simulated bus(es)...")
 
     buses: list[SimulatedBus] = []
@@ -239,7 +337,7 @@ def main() -> int:
             return 1
         # Space them out along the route so they do not travel as a convoy.
         buses.append(
-            SimulatedBus(bus_id, secret, points, args.speed, start_frac=i / max(1, args.buses))
+            SimulatedBus(bus_id, secret, points, args.speed, start_frac=i / max(1, args.buses), traffic=traffic)
         )
         print(f"  {bus_id}")
 

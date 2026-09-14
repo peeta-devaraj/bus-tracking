@@ -81,6 +81,23 @@ def infer_direction(
     return (1 if delta > 0 else -1), along_m
 
 
+def range_text(low_min: int, high_min: int) -> str:
+    """How an arrival range reads to a rider. Shared by every estimator so the
+    same range always looks the same."""
+    if low_min == 0 and high_min <= 1:
+        return "arriving"
+    if low_min == high_min:
+        return f"{low_min} min"
+    return f"{low_min}-{high_min} min"
+
+
+def display_range(low_s: float, high_s: float) -> tuple[int, int]:
+    """Round a range in seconds to the whole minutes a rider is shown."""
+    low = max(0, int(low_s / 60.0))
+    high = max(low + 1, int(round(high_s / 60.0)))
+    return low, high
+
+
 @dataclass
 class Eta:
     bus_id: str
@@ -95,11 +112,7 @@ class Eta:
 
     @property
     def text(self) -> str:
-        if self.low_min == 0 and self.high_min <= 1:
-            return "arriving"
-        if self.low_min == self.high_min:
-            return f"{self.low_min} min"
-        return f"{self.low_min}-{self.high_min} min"
+        return range_text(self.low_min, self.high_min)
 
     def to_dict(self) -> dict:
         return {

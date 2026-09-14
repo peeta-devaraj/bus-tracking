@@ -35,9 +35,7 @@ def bus_id() -> str:
     """A unique bus per test, cleaned up afterwards."""
     generated = f"TEST-{uuid.uuid4().hex[:8]}"
     yield generated
-    bus = storage.get_bus(generated)
-    if bus:
-        storage.delete_live_position(generated, str(bus.get("routeId") or ""))
+    storage.delete_all_live_positions(generated)
     storage.delete_bus(generated)
 
 

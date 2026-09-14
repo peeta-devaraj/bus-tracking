@@ -18,7 +18,7 @@ import pytest
 import requests
 
 from shared.auth import BUS_ID_HEADER, SIGNATURE_HEADER, sign
-from shared.geo import encode_polyline
+from shared.geo import encode_polyline, point_at_distance
 
 API = os.environ.get("BUSTRACK_API", "http://127.0.0.1:7071/api")
 ADMIN_KEY = os.environ.get("ADMIN_KEY", "")
@@ -362,66 +362,143 @@ class TestReadEndpoints:
         assert resp.status_code == 404
 
 
+def _drive(bus_id: str, secret: str, distances_m: list[float], step_s: float = 6.0):
+    """Send signed pings at these distances along the test route.
+
+    Timestamps are spaced step_s apart, ending now, so the rate limit (5 s) and
+    the teleport check are both satisfied without the test having to sleep.
+    """
+    start = time.time() - step_s * (len(distances_m) - 1)
+    last = None
+    for k, along in enumerate(distances_m):
+        lat, lon = point_at_distance(ROUTE_POINTS, along)
+        last = post_ping(bus_id, secret, lat=round(lat, 6), lon=round(lon, 6), ts=start + k * step_s)
+        assert last.status_code == 200, last.text
+    return last
+
+
+def _stop_at(route_id: str, along_m: float, name: str) -> str:
+    stop_id = f"STOP-{uuid.uuid4().hex[:6]}"
+    lat, lon = point_at_distance(ROUTE_POINTS, along_m)
+    resp = requests.post(
+        f"{API}/manage/stops",
+        json={"stopId": stop_id, "name": name, "lat": lat, "lon": lon,
+              "city": "testcity", "routeIds": [route_id]},
+        headers=_admin_headers(),
+        timeout=10,
+    )
+    assert resp.status_code == 200, resp.text
+    return stop_id
+
+
+def _arrivals_for(stop_id: str, bus_id: str) -> tuple[list[dict], dict]:
+    body = requests.get(f"{API}/eta", params={"stopId": stop_id, "city": "testcity"}, timeout=10).json()
+    return [a for a in body["arrivals"] if a["busId"] == bus_id], body
+
+
 class TestEtaFlow:
-    def test_a_bus_behind_a_stop_gets_an_arrival_estimate(self, bus, route_id):
+    """The test route runs about 1.3 km. Buses run it out and back, so the API
+    has to know which way a bus is going before it can promise an arrival."""
+
+    def test_one_ping_is_not_enough_to_know_which_way_a_bus_is_going(self, bus, route_id):
         bus_id, secret = bus
+        stop_id = _stop_at(route_id, 1100.0, "Far end")
+        _drive(bus_id, secret, [200.0])
 
-        stop_id = f"STOP-{uuid.uuid4().hex[:6]}"
-        requests.post(
-            f"{API}/manage/stops",
-            json={
-                "stopId": stop_id,
-                "name": "E2E test stop",
-                # Near the far end of the route, so the bus is approaching it.
-                "lat": 8.18000, "lon": 77.43350,
-                "city": "testcity",
-                "routeIds": [route_id],
-            },
-            headers=_admin_headers(),
-            timeout=10,
-        )
+        mine, body = _arrivals_for(stop_id, bus_id)
+        assert not mine, "a bus that might be driving away must not get a countdown"
+        assert body["busesTracked"] >= 1, "but it is still tracked, and the rider can be told so"
 
-        # Put the bus near the start of the route, moving.
-        post_ping(bus_id, secret, lat=8.18880, lon=77.42900, speed=8.0)
+    def test_a_bus_heading_towards_a_stop_gets_an_arrival_estimate(self, bus, route_id):
+        bus_id, secret = bus
+        stop_id = _stop_at(route_id, 1100.0, "Far end")
+        _drive(bus_id, secret, [200.0, 300.0])
 
-        body = requests.get(
-            f"{API}/eta", params={"stopId": stop_id, "city": "testcity"}, timeout=10
-        ).json()
-
-        mine = [a for a in body["arrivals"] if a["busId"] == bus_id]
+        mine, _ = _arrivals_for(stop_id, bus_id)
         assert mine, "an approaching bus should produce an estimate"
         arrival = mine[0]
         assert arrival["lowMin"] <= arrival["highMin"], "must be a range, not a point"
-        assert arrival["distanceM"] > 0
+        assert arrival["distanceM"] == pytest.approx(800, abs=40)
         assert arrival["speedSource"] in {"reported", "average", "default"}
-        assert "-" in arrival["text"] or "min" in arrival["text"] or arrival["text"] == "arriving"
+        assert arrival["method"] == "speed", "no model has been trained for this route"
+        assert "min" in arrival["text"] or arrival["text"] == "arriving"
+
+    def test_direction_is_worked_out_and_reported(self, bus, route_id):
+        bus_id, secret = bus
+        resp = _drive(bus_id, secret, [200.0, 300.0])
+        assert resp.json()["direction"] == 1
+
+        live = requests.get(f"{API}/live", params={"routeId": route_id}, timeout=10).json()
+        mine = [b for b in live["buses"] if b["busId"] == bus_id]
+        assert mine and mine[0]["direction"] == 1
+
+    def test_a_bus_on_its_return_leg_gets_an_estimate(self, bus, route_id):
+        bus_id, secret = bus
+        stop_id = _stop_at(route_id, 300.0, "Near the start")
+        _drive(bus_id, secret, [1000.0, 900.0])
+
+        mine, _ = _arrivals_for(stop_id, bus_id)
+        assert mine, "heading back towards the start, the stop is ahead of it"
+        assert mine[0]["distanceM"] == pytest.approx(600, abs=40)
+
+    def test_a_bus_driving_away_from_a_stop_gets_no_estimate(self, bus, route_id):
+        # Before direction was tracked this bus got a countdown, because its
+        # position is "before" the stop -- it was just going the other way.
+        bus_id, secret = bus
+        stop_id = _stop_at(route_id, 1100.0, "Far end")
+        _drive(bus_id, secret, [300.0, 200.0])
+
+        mine, _ = _arrivals_for(stop_id, bus_id)
+        assert not mine
 
     def test_a_bus_that_passed_the_stop_gets_no_estimate(self, bus, route_id):
         bus_id, secret = bus
+        stop_id = _stop_at(route_id, 300.0, "Behind the bus")
+        _drive(bus_id, secret, [900.0, 1000.0])
 
-        stop_id = f"STOP-{uuid.uuid4().hex[:6]}"
-        requests.post(
-            f"{API}/manage/stops",
-            json={
-                "stopId": stop_id, "name": "Behind the bus",
-                # Near the start; the bus will be reported past it.
-                "lat": 8.18880, "lon": 77.42900,
-                "city": "testcity", "routeIds": [route_id],
-            },
-            headers=_admin_headers(), timeout=10,
+        mine, _ = _arrivals_for(stop_id, bus_id)
+        assert not mine, "refusing to answer beats inventing a number"
+
+
+class TestLearning:
+    def test_training_a_route_with_no_history_says_so(self, route_id):
+        resp = requests.post(
+            f"{API}/manage/learn", params={"routeId": route_id}, headers=_admin_headers(), timeout=30
         )
+        assert resp.status_code == 200, resp.text
+        result = resp.json()["results"][0]
+        assert result["routeId"] == route_id
+        assert result["trained"] is False
+        assert result["reason"] == "no usable history"
 
-        post_ping(bus_id, secret, lat=8.17800, lon=77.43400)
-
-        body = requests.get(
-            f"{API}/eta", params={"stopId": stop_id, "city": "testcity"}, timeout=10
-        ).json()
-        assert not [a for a in body["arrivals"] if a["busId"] == bus_id], (
-            "refusing to answer beats inventing a number"
+    def test_days_must_be_a_number(self, route_id):
+        resp = requests.post(
+            f"{API}/manage/learn", params={"routeId": route_id, "days": "lots"},
+            headers=_admin_headers(), timeout=30,
         )
+        assert resp.status_code == 400
 
 
 class TestRecordingMode:
+    def test_deleting_a_bus_that_was_recording_removes_it_from_the_map(self, route_id):
+        # Recording files the live position under no route, while the bus is
+        # still assigned to one. Deletion used to remove only the assigned
+        # route's row, leaving the bus on the map as a ghost.
+        bus_id = f"E2E-{uuid.uuid4().hex[:8]}"
+        secret = requests.post(
+            f"{API}/manage/buses",
+            json={"busId": bus_id, "label": "recording then deleted", "routeId": route_id},
+            headers=_admin_headers(), timeout=10,
+        ).json()["secret"]
+
+        resp = post_ping(bus_id, secret, lat=ROUTE_POINTS[0][0], lon=ROUTE_POINTS[0][1], record=True)
+        assert resp.status_code == 200, resp.text
+        on_map = lambda: bus_id in {b["busId"] for b in requests.get(f"{API}/live", timeout=10).json()["buses"]}
+        assert on_map()
+
+        requests.delete(f"{API}/manage/buses/{bus_id}", headers=_admin_headers(), timeout=10)
+        assert not on_map(), "a deleted bus must not linger on the map"
+
     def test_recording_builds_a_trace_that_becomes_a_route(self, bus):
         bus_id, secret = bus
         now = time.time()

@@ -278,6 +278,10 @@ a viva.
 | **Route data** | OSM-pinned stops routed over real roads; record mode when someone can ride | Hand-placed seed; importing OSM bus relations | OSM has almost no mapped *bus routes* for Nagercoil, but its *roads and landmarks* are good. Hand-placed stops were up to 1.45 km out. Recording is still the most accurate source, but depends on access to a bus. |
 | **Off-route reports** | Flag | Reject | Real buses divert. Rejecting would make the map lie by omission. |
 | **ETA output** | A range | A single number | A tracker that says "7 minutes" and is wrong by four is worse than one that says "6–11" and is right. The range teaches the rider how much to trust it. |
+| **ETA method** | Pace per 200 m of road, per direction, per time of day, learned from history, with a speed-based fallback | A single average speed; a neural model | Per-bin pace learns stop dwell and rush hour with no labelling and degrades gracefully where data is thin. On simulated traffic it cut error 35–44% beyond an average pace. A neural model would need far more data than exists and could not say how much of an answer was learned. |
+| **Evaluating it** | Three estimators plus a structure-free control | Learned vs live only | The two-way comparison showed large gains even on the control. The live estimator was ignoring stop time; an "average pace" middle estimator separates that from genuinely learning where and when. |
+| **Simulated history** | Allowed, labelled `trainedOn` on every estimate and shown to riders | Hidden, or not used at all | Without it there is nothing to learn from and nothing to demo. Unlabelled, it would pass invented traffic off as knowledge of Nagercoil. |
+| **Direction of travel** | Inferred from movement against an anchor | Consecutive fixes; no direction | Without direction, a bus driving away from a stop got a countdown to it. Comparing consecutive fixes stuck for buses crawling through rush hour; measured on simulated traffic, the anchor is wrong for under 1% of fixes, all at termini. |
 
 ---
 
@@ -311,8 +315,10 @@ In the order that would actually add the most value:
    buses actually take, which the OSM-routed geometry can only assume.
 2. **IoT Hub + a GPS module** — removes the wake-lock limitation entirely and
    makes the tracker independent of a driver's phone and goodwill.
-3. **Learned ETAs** — segment travel times by time of day from
-   `PositionHistory`, which the system is already accumulating.
+3. **Learned ETAs on real data** — built and evaluated on simulated traffic
+   (`docs/eta-evaluation.md`). The open question is how much structure real
+   Nagercoil traffic has, which only recorded trips can answer. Weekday,
+   festival and weather effects are not modelled.
 4. **Multi-reporter consensus** — the only genuine defence against a driver
    reporting a false position.
 5. **AIS-140 / VLTD ingestion** — Indian public service vehicles are already

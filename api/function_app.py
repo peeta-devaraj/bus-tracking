@@ -2,7 +2,8 @@
 
 Azure Functions, Python v2 programming model. One ingest endpoint that
 everything writes through, a handful of read endpoints the rider and admin
-pages call, and a timer that sweeps stale buses.
+pages call, a timer that sweeps stale buses, and a nightly job that learns
+travel times from history.
 
 The ingest endpoint is anonymous at the platform level on purpose: a bus
 authenticates with its own HMAC signature, not with a shared function key that
@@ -18,9 +19,15 @@ import time
 
 import azure.functions as func
 
-from shared import storage
+from shared import storage, training
 from shared.auth import BUS_ID_HEADER, SIGNATURE_HEADER, new_secret, verify
-from shared.eta import average_speed_kmh_from_history, estimate
+from shared.eta import (
+    average_speed_kmh_from_history,
+    display_range,
+    estimate,
+    infer_direction,
+    range_text,
+)
 from shared.geo import decode_polyline, encode_polyline, route_length_m, snap_to_route
 from shared.validation import (
     Fix,
@@ -159,6 +166,11 @@ def ping(req: func.HttpRequest) -> func.HttpResponse:
     if fix.nonce:
         nonces.append(fix.nonce)
 
+    along_m = verdict.snap.along_m if verdict.snap else None
+    previous_direction = int((previous_entity or {}).get("direction") or 0)
+    previous_anchor = (previous_entity or {}).get("dirAnchorM")
+    direction, anchor = infer_direction(previous_anchor, previous_direction, along_m)
+
     storage.upsert_live_position(
         bus_id=bus_id,
         route_id=route_id,
@@ -169,11 +181,13 @@ def ping(req: func.HttpRequest) -> func.HttpResponse:
         speed_mps=fix.speed_mps,
         heading=fix.heading,
         flags=verdict.flags,
-        along_m=verdict.snap.along_m if verdict.snap else None,
+        along_m=along_m,
         offset_m=verdict.snap.offset_m if verdict.snap else None,
         is_simulated=bool(bus.get("isSimulated")),
         label=str(bus.get("label") or bus_id),
         recent_nonces=nonces,
+        direction=direction,
+        dir_anchor_m=anchor,
     )
 
     storage.append_history(
@@ -184,7 +198,11 @@ def ping(req: func.HttpRequest) -> func.HttpResponse:
         speedMps=fix.speed_mps,
         heading=fix.heading,
         accuracyM=fix.accuracy_m,
-        alongM=verdict.snap.along_m if verdict.snap else None,
+        alongM=along_m,
+        # Which route and which way: what the travel-time model learns from.
+        routeId=route_id or None,
+        direction=direction,
+        isSimulated=bool(bus.get("isSimulated")),
     )
 
     return _json(
@@ -194,6 +212,7 @@ def ping(req: func.HttpRequest) -> func.HttpResponse:
             "quality": verdict.quality,
             "offsetM": round(verdict.snap.offset_m, 1) if verdict.snap else None,
             "alongM": round(verdict.snap.along_m, 1) if verdict.snap else None,
+            "direction": direction,
             "recording": recording,
         }
     )
@@ -247,6 +266,7 @@ def live(req: func.HttpRequest) -> func.HttpResponse:
                 "flags": p.get("flags") or [],
                 "isSimulated": bool(p.get("isSimulated")),
                 "alongM": p.get("alongM"),
+                "direction": int(p.get("direction") or 0),
             }
         )
 
@@ -338,6 +358,13 @@ def eta(req: func.HttpRequest) -> func.HttpResponse:
     Returns an empty list rather than a guess when nothing can be said, and
     always reports which buses were considered so the rider can tell the
     difference between "no bus is coming" and "no bus is being tracked".
+
+    Each arrival says how it was estimated. `method` is "speed" for remaining
+    distance over the bus's speed, or "learned" when a travel-time model
+    trained on history priced most of the remaining road. A learned arrival
+    also carries `trainedOn` -- "simulated", "real" or "mixed" -- which clients
+    must show: a model learned from simulated buses knows nothing about real
+    traffic.
     """
     if req.method == "OPTIONS":
         return _preflight()
@@ -366,6 +393,7 @@ def eta(req: func.HttpRequest) -> func.HttpResponse:
             continue
 
         total_length = route_length_m(points)
+        model, model_meta = training.get_model(route_id)
 
         for bus in storage.list_live_positions(route_id):
             tracked_buses += 1
@@ -384,12 +412,39 @@ def eta(req: func.HttpRequest) -> func.HttpResponse:
                 is_simulated=bool(bus.get("isSimulated")),
                 route_length_m=total_length,
                 loops=False,
+                direction=int(bus.get("direction") or 0),
             )
-            if result is not None:
-                entry = result.to_dict()
-                entry["routeId"] = route_id
-                entry["routeName"] = route.get("name") or route_id
-                arrivals.append(entry)
+            if result is None:
+                continue
+
+            entry = result.to_dict()
+            entry["routeId"] = route_id
+            entry["routeName"] = route.get("name") or route_id
+            entry["method"] = "speed"
+
+            # A learned model replaces the range when it covers most of the
+            # remaining road. It falls back to the same speed the naive
+            # estimate used for any stretch it has no data on.
+            if model is not None and result.speed_source != "arrived" and result.speed_kmh_used > 0:
+                prediction = model.predict(
+                    int(bus.get("direction") or 0),
+                    float(bus["alongM"]),
+                    stop_snap.along_m,
+                    now,
+                    3.6 / result.speed_kmh_used,
+                )
+                if prediction is not None and prediction.learned_share >= 0.5:
+                    low, high = display_range(prediction.low_seconds, prediction.high_seconds)
+                    entry.update({
+                        "lowMin": low,
+                        "highMin": high,
+                        "text": range_text(low, high),
+                        "method": "learned",
+                        "learnedShare": round(prediction.learned_share, 2),
+                        "trainedOn": training.trained_on(float((model_meta or {}).get("simulatedShare", 1.0))),
+                    })
+
+            arrivals.append(entry)
 
     arrivals.sort(key=lambda a: a["lowMin"])
 
@@ -507,9 +562,9 @@ def admin_delete_bus(req: func.HttpRequest) -> func.HttpResponse:
         return _json({"error": "admin key required"}, 401)
 
     bus_id = req.route_params.get("busId", "")
-    bus = storage.get_bus(bus_id)
-    if bus:
-        storage.delete_live_position(bus_id, str(bus.get("routeId") or ""))
+    # Every partition, not just the current route: a bus that recorded a trace
+    # or changed route would otherwise stay on the map as a ghost.
+    storage.delete_all_live_positions(bus_id)
     storage.delete_bus(bus_id)
     return _json({"deleted": bus_id})
 
@@ -612,6 +667,42 @@ def admin_trace(req: func.HttpRequest) -> func.HttpResponse:
             "points": [[r["lat"], r["lon"], r["ts"]] for r in rows],
         }
     )
+
+
+@app.route(route="manage/learn", methods=["POST", "OPTIONS"], auth_level=func.AuthLevel.ANONYMOUS)
+def admin_learn(req: func.HttpRequest) -> func.HttpResponse:
+    """Train travel-time models now, instead of waiting for the nightly run.
+
+    ?routeId=X trains one route; without it, every route that has a bus
+    assigned. ?days=N sets how much history to use (default 14, max 60).
+    """
+    if req.method == "OPTIONS":
+        return _preflight()
+    if not _is_admin(req):
+        return _json({"error": "admin key required"}, 401)
+
+    try:
+        days = max(1, min(int(req.params.get("days", training.HISTORY_DAYS)), 60))
+    except ValueError:
+        return _json({"error": "days must be a number"}, 400)
+
+    route_id = req.params.get("routeId")
+    route_ids = [route_id] if route_id else sorted(
+        {b.get("routeId") for b in storage.list_buses() if b.get("routeId")}
+    )
+    return _json({"results": [training.train_route(rid, days) for rid in route_ids]})
+
+
+# 22:00 UTC is 03:30 in Nagercoil: after the last bus, before the first.
+@app.timer_trigger(schedule="0 0 22 * * *", arg_name="timer", run_on_startup=False)
+def learn_nightly(timer: func.TimerRequest) -> None:
+    """Retrain every route's travel-time model from the last two weeks."""
+    route_ids = sorted({b.get("routeId") for b in storage.list_buses() if b.get("routeId")})
+    for route_id in route_ids:
+        try:
+            training.train_route(route_id)
+        except Exception:  # one bad route must not stop the others training
+            log.exception("nightly training failed for %s", route_id)
 
 
 # --------------------------------------------------------------------------

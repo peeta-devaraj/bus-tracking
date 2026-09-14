@@ -336,6 +336,14 @@ async function poll() {
 // Stop arrivals
 // -------------------------------------------------------------------------
 
+// How an arrival was worked out, in words a rider can use.
+function arrivalNote(a) {
+  if (a.text === "arriving") return "at the stop";
+  if (a.method === "learned") return "timed from past trips on this road";
+  if (a.speedSource === "default") return "estimated from typical speed";
+  return `based on ${a.speedSource} speed`;
+}
+
 async function showStop(stop) {
   selectedStopId = stop.stopId;
   document.getElementById("stopName").textContent = stop.name;
@@ -361,14 +369,18 @@ async function refreshArrivals() {
 
     box.innerHTML = data.arrivals.map((a) => {
       const conf = confidenceOf(a.confidence);
-      const note = a.speedSource === "default"
-        ? "estimated from typical speed"
-        : `based on ${a.speedSource} speed`;
+      const note = arrivalNote(a);
+      // A time learned from simulated buses says nothing about real traffic,
+      // so it is flagged in the warning colour, not tucked into grey text.
+      const learnedWarning = a.method === "learned" && a.trainedOn !== "real"
+        ? `<div class="meta" style="color:var(--uncertain)">Learned from ${escapeHtml(a.trainedOn)} trips, not real traffic</div>`
+        : "";
       return `
         <div class="arrival">
           <div>
             <div class="who">${escapeHtml(a.routeName)}${a.isSimulated ? '<span class="simtag">SIM</span>' : ""}</div>
             <div class="meta">${(a.distanceM / 1000).toFixed(1)} km away &middot; ${escapeHtml(note)}</div>
+            ${learnedWarning}
             <div class="meta" style="color:${conf.color}">${conf.label}</div>
           </div>
           <div class="when">${escapeHtml(a.text)}</div>

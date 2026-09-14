@@ -396,6 +396,27 @@ class SegmentModel:
         return model
 
 
+def _arrival_from(
+    points: Sequence[TrackPoint],
+    start: int,
+    target_along_m: float,
+    direction: int,
+) -> float | None:
+    """First time a time-sorted track reaches target_along_m in `direction`,
+    scanning forward from index `start`. None if it turns round first."""
+    for k in range(start, len(points) - 1):
+        p, q = points[k], points[k + 1]
+        if q.direction != direction:
+            return None  # turned round before getting there
+        a = (p.along_m - target_along_m) * direction
+        b = (q.along_m - target_along_m) * direction
+        if a <= 0 <= b:
+            if b == a:
+                return p.ts
+            return p.ts + (q.ts - p.ts) * (-a / (b - a))
+    return None
+
+
 def arrival_time(
     points: Sequence[TrackPoint],
     target_along_m: float,
@@ -409,13 +430,68 @@ def arrival_time(
     fixes and never extrapolates.
     """
     pts = [p for p in sorted(points, key=lambda p: p.ts) if p.ts >= after_ts]
-    for p, q in zip(pts, pts[1:]):
-        if q.direction != direction:
-            return None  # turned round before getting there
-        a = (p.along_m - target_along_m) * direction
-        b = (q.along_m - target_along_m) * direction
-        if a <= 0 <= b:
-            if b == a:
-                return p.ts
-            return p.ts + (q.ts - p.ts) * (-a / (b - a))
-    return None
+    return _arrival_from(pts, 0, target_along_m, direction)
+
+
+def train_with_calibration(
+    route_length_m: float,
+    tracks_by_day: dict[str, list[list[TrackPoint]]],
+    stops_along_m: Sequence[float],
+    calibration_days: int = 2,
+    fallback_pace: float = 1 / 5.0,
+    query_every: int = 6,
+    min_remaining_m: float = 150.0,
+) -> tuple[SegmentModel, dict]:
+    """Train a route's model, calibrating its ranges on held-out days.
+
+    The last `calibration_days` of history are held out: a provisional model
+    trained on the earlier days predicts arrivals at stops on those days, and
+    the ratio of what actually happened to what it predicted sets the range.
+    The final model is then trained on everything, keeping that calibration.
+
+    Unlike the offline evaluation there is no ground truth here, only what
+    buses were observed to do, so "actually happened" is the observed arrival.
+    With too little history to hold anything out, the model is trained but left
+    uncalibrated, which keeps the naive estimator's range.
+    """
+    days = sorted(tracks_by_day)
+    info: dict = {"days": len(days), "calibrationSamples": 0}
+
+    ratios: list[float] = []
+    if len(days) > calibration_days:
+        provisional = SegmentModel(route_length_m)
+        for day in days[:-calibration_days]:
+            for track in tracks_by_day[day]:
+                provisional.learn_track(track)
+
+        for day in days[-calibration_days:]:
+            for track in tracks_by_day[day]:
+                pts = sorted(track, key=lambda p: p.ts)
+                for i in range(0, len(pts), query_every):
+                    p = pts[i]
+                    if p.direction not in (1, -1):
+                        continue
+                    if p.along_m < TERMINUS_ZONE_M or p.along_m > route_length_m - TERMINUS_ZONE_M:
+                        continue
+                    for stop_m in stops_along_m:
+                        if (stop_m - p.along_m) * p.direction < min_remaining_m:
+                            continue
+                        arrived = _arrival_from(pts, i, stop_m, p.direction)
+                        if arrived is None:
+                            continue
+                        raw = provisional.raw_seconds(p.direction, p.along_m, stop_m, p.ts, fallback_pace)
+                        if raw is None:
+                            continue
+                        seconds, share = raw
+                        if share >= 0.9 and seconds > 0:
+                            ratios.append((arrived - p.ts) / seconds)
+
+    model = SegmentModel(route_length_m)
+    for day in days:
+        for track in tracks_by_day[day]:
+            model.learn_track(track)
+    model.calibrate(ratios)
+
+    info["calibrationSamples"] = len(ratios)
+    info["calibrated"] = model.calibrated
+    return model, info

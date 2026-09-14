@@ -14,6 +14,7 @@ Partitioning, and why:
   Routes          PK = city          RK = routeId
   Stops           PK = city          RK = stopId
   Rejections      PK = date          RK = inverted timestamp  <- the reject log
+  EtaModels       PK = routeId       RK = "meta" | "dir|band|bin"  <- learned travel times
 
 PositionHistory and Rejections use an inverted timestamp as the row key so
 that Table Storage's natural ascending order returns the most recent rows
@@ -41,8 +42,12 @@ T_HISTORY = "PositionHistory"
 T_ROUTES = "Routes"
 T_STOPS = "Stops"
 T_REJECTIONS = "Rejections"
+T_ETA_MODELS = "EtaModels"
 
-ALL_TABLES = (T_BUSES, T_LIVE, T_HISTORY, T_ROUTES, T_STOPS, T_REJECTIONS)
+ALL_TABLES = (T_BUSES, T_LIVE, T_HISTORY, T_ROUTES, T_STOPS, T_REJECTIONS, T_ETA_MODELS)
+
+# Table Storage transactions: at most 100 operations, all in one partition.
+BATCH_LIMIT = 100
 
 # Year 3000 in epoch milliseconds, used to invert timestamps for descending order.
 _MAX_TS_MS = 32_503_680_000_000
@@ -181,6 +186,8 @@ def upsert_live_position(
     is_simulated: bool = False,
     label: str = "",
     recent_nonces: Iterable[str] = (),
+    direction: int = 0,
+    dir_anchor_m: float | None = None,
 ) -> dict[str, Any]:
     entity = {
         "PartitionKey": _live_partition(route_id),
@@ -199,6 +206,10 @@ def upsert_live_position(
         "isSimulated": bool(is_simulated),
         "label": label or bus_id,
         "recentNonces": json.dumps(list(recent_nonces)[-20:]),
+        # +1 towards the end of the route, -1 back, 0 not yet known. The anchor
+        # is where that direction was last confirmed; see eta.infer_direction.
+        "direction": int(direction),
+        "dirAnchorM": float(dir_anchor_m) if dir_anchor_m is not None else None,
         "updatedAt": time.time(),
     }
     table(T_LIVE).upsert_entity(entity, mode=UpdateMode.REPLACE)
@@ -218,6 +229,24 @@ def _decode_live(entity: dict[str, Any]) -> dict[str, Any]:
     entity["flags"] = json.loads(entity.get("flags") or "[]")
     entity["recentNonces"] = json.loads(entity.get("recentNonces") or "[]")
     return entity
+
+
+def delete_all_live_positions(bus_id: str) -> int:
+    """Remove a bus's live position from every route it has one under.
+
+    A bus can hold rows in more than one partition: recording mode files its
+    position under "_unassigned", and a bus moved to another route keeps its
+    old row until overwritten. Deleting only the current route's row left
+    those behind as ghosts on the map.
+    """
+    client = table(T_LIVE)
+    rows = list(client.query_entities(f"RowKey eq '{bus_id}'", select=["PartitionKey", "RowKey"]))
+    for row in rows:
+        try:
+            client.delete_entity(row["PartitionKey"], row["RowKey"])
+        except ResourceNotFoundError:
+            pass
+    return len(rows)
 
 
 def delete_live_position(bus_id: str, route_id: str) -> None:
@@ -245,6 +274,48 @@ def append_history(bus_id: str, ts: float, lat: float, lon: float, **extra: Any)
         if value is not None and not isinstance(value, (list, dict)):
             entity[key] = value
     table(T_HISTORY).create_entity(entity)
+
+
+def history_for_day(bus_id: str, day: str) -> list[dict[str, Any]]:
+    """Every fix a bus sent on one UTC day, newest first. For training."""
+    rows = table(T_HISTORY).query_entities(f"PartitionKey eq '{bus_id}_{day}'")
+    return [dict(e) for e in rows]
+
+
+def batch_append_history(rows: list[dict[str, Any]]) -> int:
+    """Bulk history insert, used by the simulated-history backfill.
+
+    Each row needs busId, ts, lat, lon, and may carry any scalar extras.
+    Rows are grouped by partition (bus and day) because a transaction cannot
+    span partitions.
+    """
+    by_partition: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        day = time.strftime("%Y%m%d", time.gmtime(row["ts"]))
+        entity = {
+            "PartitionKey": f"{row['busId']}_{day}",
+            # A fixed suffix instead of _invert's random one, so running the
+            # backfill twice overwrites the same rows rather than doubling the
+            # history a model is trained on.
+            "RowKey": f"{int(_MAX_TS_MS - row['ts'] * 1000):015d}_000000",
+        }
+        for key, value in row.items():
+            if value is not None and not isinstance(value, (list, dict)):
+                entity[key] = value
+        by_partition.setdefault(entity["PartitionKey"], []).append(entity)
+
+    client = table(T_HISTORY)
+    written = 0
+    for entities in by_partition.values():
+        # Row keys must be unique inside a transaction; keep the last fix for
+        # any millisecond that repeats.
+        unique = {e["RowKey"]: e for e in entities}
+        batch = list(unique.values())
+        for i in range(0, len(batch), BATCH_LIMIT):
+            chunk = batch[i : i + BATCH_LIMIT]
+            client.submit_transaction([("upsert", e) for e in chunk])
+            written += len(chunk)
+    return written
 
 
 def recent_history(bus_id: str, day: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
@@ -432,6 +503,66 @@ def batch_upsert_stops(stops: list[dict[str, Any]], city: str) -> int:
         client.submit_transaction(operations)
         written += len(chunk)
     return written
+
+
+# --------------------------------------------------------------------------
+# Learned arrival models
+# --------------------------------------------------------------------------
+
+def _model_row_key(direction: int, band: str, bin_index: int) -> str:
+    return f"{direction:+d}|{band}|{bin_index:05d}"
+
+
+def delete_eta_model(route_id: str) -> int:
+    """Remove every stored row of a route's model. Returns how many went."""
+    client = table(T_ETA_MODELS)
+    stale = [e["RowKey"] for e in client.query_entities(
+        f"PartitionKey eq '{route_id}'", select=["PartitionKey", "RowKey"]
+    )]
+    for i in range(0, len(stale), BATCH_LIMIT):
+        client.submit_transaction(
+            [("delete", {"PartitionKey": route_id, "RowKey": rk}) for rk in stale[i : i + BATCH_LIMIT]]
+        )
+    return len(stale)
+
+
+def save_eta_model(route_id: str, meta: dict[str, Any], rows: list[dict[str, Any]]) -> int:
+    """Replace a route's stored model with a newly trained one.
+
+    Old rows are deleted first. A request arriving in that brief gap finds no
+    model and falls back to the naive estimate, which is the right failure.
+    """
+    client = table(T_ETA_MODELS)
+    delete_eta_model(route_id)
+
+    entities = [{"PartitionKey": route_id, "RowKey": "meta", **meta}]
+    for row in rows:
+        entities.append({
+            "PartitionKey": route_id,
+            "RowKey": _model_row_key(int(row["direction"]), str(row["band"]), int(row["bin"])),
+            "direction": int(row["direction"]),
+            "band": str(row["band"]),
+            "bin": int(row["bin"]),
+            "seconds": float(row["seconds"]),
+            "metres": float(row["metres"]),
+        })
+    for i in range(0, len(entities), BATCH_LIMIT):
+        client.submit_transaction([("upsert", e) for e in entities[i : i + BATCH_LIMIT]])
+    return len(entities) - 1
+
+
+def load_eta_model(route_id: str) -> tuple[dict[str, Any], list[dict[str, Any]]] | None:
+    meta: dict[str, Any] | None = None
+    rows: list[dict[str, Any]] = []
+    for entity in table(T_ETA_MODELS).query_entities(f"PartitionKey eq '{route_id}'"):
+        e = dict(entity)
+        if e["RowKey"] == "meta":
+            meta = e
+        else:
+            rows.append(e)
+    if meta is None:
+        return None
+    return meta, rows
 
 
 # --------------------------------------------------------------------------
