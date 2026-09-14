@@ -216,3 +216,100 @@ def bbox_contains(bbox: tuple[float, float, float, float], lat: float, lon: floa
     """bbox is (min_lat, min_lon, max_lat, max_lon)."""
     min_lat, min_lon, max_lat, max_lon = bbox
     return min_lat <= lat <= max_lat and min_lon <= lon <= max_lon
+
+
+# --------------------------------------------------------------------------
+# Out-and-back excursions ("spurs")
+# --------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class Excursion:
+    """A stretch where a path leaves a point and comes back to it.
+
+    Routing engines produce these when a waypoint snaps to a side lane: the
+    route drives up the lane to touch the waypoint and reverses out again.
+    Recorded GPS traces produce them too, when a bus pulls into a stand.
+    """
+
+    start: int            # index where the path leaves
+    end: int              # index where it has returned (same place as start)
+    length_m: float       # distance travelled out and back
+    tip: Point            # the furthest point reached from `start`
+
+
+def find_excursions(
+    points: Sequence[Point],
+    max_length_m: float = 600.0,
+    return_radius_m: float = 8.0,
+) -> list[Excursion]:
+    """Find out-and-back excursions no longer than max_length_m.
+
+    An excursion is a stretch where the path goes somewhere and retraces its
+    way back to within return_radius_m of where it left. Three rules keep this
+    from misfiring:
+
+      * The whole out-and-back must fit the limit. A detection is grown back
+        to where the path genuinely left the road before being measured, so a
+        long dead end is rejected outright rather than half-trimmed into a
+        stub.
+      * The path must actually go somewhere -- further than return_radius_m.
+        A GPS trace sitting still at a stop repeats one coordinate; that is a
+        dwell, not a detour.
+      * The length limit is what protects real circular routes, which also
+        return to their start but only after a long way round.
+    """
+    n = len(points)
+    found: list[Excursion] = []
+
+    def gap(a: int, b: int) -> float:
+        return haversine(points[a][0], points[a][1], points[b][0], points[b][1])
+
+    i = 0
+    while i < n:
+        travelled = 0.0
+        end: int | None = None
+        for j in range(i + 1, n):
+            travelled += gap(j - 1, j)
+            if travelled > max_length_m:
+                break
+            if j > i + 1 and gap(i, j) <= return_radius_m:
+                end = j  # keep scanning: prefer the longest return within the limit
+
+        if end is None:
+            i += 1
+            continue
+
+        # Grow outwards while the path before `i` and after `end` retrace each
+        # other: that is still the same excursion, seen from further down.
+        start = i
+        while start > 0 and end + 1 < n and gap(start - 1, end + 1) <= return_radius_m:
+            start -= 1
+            end += 1
+
+        length = sum(gap(k - 1, k) for k in range(start + 1, end + 1))
+        base = points[start]
+        tip = max(points[start + 1 : end], key=lambda p: haversine(base[0], base[1], p[0], p[1]))
+        reach = haversine(base[0], base[1], tip[0], tip[1])
+
+        if length <= max_length_m and reach > return_radius_m:
+            # Growing outwards can reach back over an excursion already found;
+            # the wider one supersedes it.
+            while found and found[-1].start >= start:
+                found.pop()
+            found.append(Excursion(start=start, end=end, length_m=length, tip=tip))
+
+        # Skip past this stretch either way, so a rejected long dead end is not
+        # rediscovered piecemeal from each of its inner points.
+        i = end
+
+    return found
+
+
+def remove_excursions(points: Sequence[Point], excursions: Sequence[Excursion]) -> list[Point]:
+    """Cut the given excursions out of a path, keeping everything else in order."""
+    drop: set[int] = set()
+    for ex in excursions:
+        # Keep the departure vertex; drop the loop up to and including the
+        # return vertex, which duplicates it.
+        drop.update(range(ex.start + 1, ex.end + 1))
+    return [p for idx, p in enumerate(points) if idx not in drop]

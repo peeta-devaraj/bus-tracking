@@ -1,0 +1,298 @@
+{
+  "city": "nagercoil",
+  "source": "osm-routed",
+  "generatedAt": "2026-09-14T04:56:14+00:00",
+  "attribution": "Map data (c) OpenStreetMap contributors, ODbL. Routing by OSRM.",
+  "caveat": "Road-following geometry between OSM-pinned stops. This is the drivable path between stops, not a surveyed bus route.",
+  "stops": [
+    {
+      "stopId": "NGL-S1",
+      "name": "Vadasery Bus Stand",
+      "kind": "station",
+      "osm": "way/227903070",
+      "osmName": "நாகர்கோவில் வடசேரி பேருந்து நிலையம்",
+      "featureLat": 8.191047,
+      "featureLon": 77.430106,
+      "position": {
+        "lat": 8.191281,
+        "lon": 77.430155,
+        "offsetFromFeatureM": 26.6
+      }
+    },
+    {
+      "stopId": "NGL-S2",
+      "name": "Vadasery Market",
+      "kind": "roadside",
+      "osm": "way/248610348",
+      "osmName": "Vadasery Market",
+      "featureLat": 8.191745,
+      "featureLon": 77.431213,
+      "position": {
+        "lat": 8.192036,
+        "lon": 77.431614,
+        "offsetFromFeatureM": 54.7
+      }
+    },
+    {
+      "stopId": "NGL-S4",
+      "name": "Anna Bus Stand (Nagercoil Town)",
+      "kind": "station",
+      "osm": "way/253175443",
+      "osmName": "Anna Town Bus Stand",
+      "featureLat": 8.181766,
+      "featureLon": 77.434279,
+      "position": {
+        "lat": 8.18176,
+        "lon": 77.43432,
+        "offsetFromFeatureM": 4.6
+      }
+    },
+    {
+      "stopId": "NGL-S3",
+      "name": "Kottar",
+      "kind": "roadside",
+      "osm": "node/360396403",
+      "osmName": "Kottar",
+      "featureLat": 8.174018,
+      "featureLon": 77.439315,
+      "position": {
+        "lat": 8.17373,
+        "lon": 77.439315,
+        "offsetFromFeatureM": 32.0
+      }
+    },
+    {
+      "stopId": "NGL-S5",
+      "name": "Nagercoil Junction",
+      "kind": "station",
+      "osm": "node/353002292",
+      "osmName": "Nagercoil Junction",
+      "featureLat": 8.174535,
+      "featureLon": 77.443879,
+      "position": {
+        "lat": 8.17443,
+        "lon": 77.443557,
+        "offsetFromFeatureM": 37.3
+      }
+    },
+    {
+      "stopId": "SUC-S1",
+      "name": "Suchindram",
+      "kind": "roadside",
+      "osm": "node/353035635",
+      "osmName": "Suchindram",
+      "featureLat": 8.156134,
+      "featureLon": 77.46599,
+      "position": {
+        "lat": 8.15633,
+        "lon": 77.46608,
+        "offsetFromFeatureM": 23.9
+      }
+    },
+    {
+      "stopId": "KTM-S1",
+      "name": "Kottaram",
+      "kind": "roadside",
+      "osm": "node/2593132676",
+      "osmName": "Kottaram",
+      "featureLat": 8.11821,
+      "featureLon": 77.52465,
+      "position": {
+        "lat": 8.118207,
+        "lon": 77.52454,
+        "offsetFromFeatureM": 12.1
+      }
+    },
+    {
+      "stopId": "KK-S1",
+      "name": "Kanyakumari Bus Stand",
+      "kind": "station",
+      "osm": "way/551655745",
+      "osmName": "Kanniyakumari Bus Stand",
+      "featureLat": 8.082278,
+      "featureLon": 77.543168,
+      "position": {
+        "lat": 8.08248,
+        "lon": 77.543176,
+        "offsetFromFeatureM": 22.5
+      }
+    }
+  ],
+  "routes": [
+    {
+      "routeId": "NGL-VAD-KKD",
+      "name": "Vadasery - Anna Bus Stand - Kottar - Nagercoil Junction",
+      "stopIds": [
+        "NGL-S1",
+        "NGL-S2",
+        "NGL-S4",
+        "NGL-S3",
+        "NGL-S5"
+      ],
+      "polyline": "oz~p@oarwMOlAa@MQC[HBp@cCSaBS`@aB^kBZkARe@X[l@a@jAm@dAJ|@LxBd@dCb@D@lDv@|D`AfBFT?rCSlBM^Er@Iz@Ml@MbASlA_@ZUCEAE?E@EBCDCD?B?F@BBBDZMf@WROn@e@dAcAp@o@RUvBoBfAeAlAkABMKOSGi@Ea@CMGA?CSHC\\?FDTRD@|@DR@NARQROt@o@rGgG`E{BdA[zBo@~Bu@x@UfAYVGxBk@d@OxBg@nB[@_F?uAFMBGRm@J]Fc@@e@QiACQAKMi@K_@wBkI[oADA",
+      "distanceM": 3590.1,
+      "freeFlowS": 373.9,
+      "vertices": 101,
+      "detourRatio": 1.27,
+      "stopsAlong": [
+        {
+          "stopId": "NGL-S1",
+          "alongM": 0.6,
+          "offsetM": 26.6
+        },
+        {
+          "stopId": "NGL-S2",
+          "alongM": 478.3,
+          "offsetM": 54.7
+        },
+        {
+          "stopId": "NGL-S4",
+          "alongM": 1935.9,
+          "offsetM": 4.6
+        },
+        {
+          "stopId": "NGL-S3",
+          "alongM": 3096.1,
+          "offsetM": 32.0
+        },
+        {
+          "stopId": "NGL-S5",
+          "alongM": 3589.0,
+          "offsetM": 37.3
+        }
+      ],
+      "spurs": [
+        {
+          "stopId": "NGL-S2",
+          "lengthM": 285.9,
+          "action": "removed"
+        }
+      ],
+      "legs": [
+        {
+          "from": "NGL-S1",
+          "to": "NGL-S2",
+          "distanceM": 477.8,
+          "freeFlowS": 95.7
+        },
+        {
+          "from": "NGL-S2",
+          "to": "NGL-S4",
+          "distanceM": 1457.6,
+          "freeFlowS": 127.1
+        },
+        {
+          "from": "NGL-S4",
+          "to": "NGL-S3",
+          "distanceM": 1160.2,
+          "freeFlowS": 104.6
+        },
+        {
+          "from": "NGL-S3",
+          "to": "NGL-S5",
+          "distanceM": 492.9,
+          "freeFlowS": 46.5
+        }
+      ]
+    },
+    {
+      "routeId": "NGL-SUC",
+      "name": "Anna Bus Stand - Suchindram",
+      "stopIds": [
+        "NGL-S4",
+        "SUC-S1"
+      ],
+      "polyline": "}~|p@o{rwMA?CSHC\\?FDTRD@|@DR@NARQROt@o@rGgG`E{BdA[zBo@~Bu@x@UfAYVGxBk@d@OxBg@nB[jBKLAnAEH@VC\\CVCFALEj@a@\\U`@_@tAeAbC_BhAo@TQRKl@{AL_AHaBF_EB]HUNa@Xm@Ze@r@aADE`@}@Lk@Tq@Vw@`@m@j@u@xAaBnAmAXW~@y@fAaArC{Cd@u@p@gAR]NWLKJIzCqApAy@xAoA`@_@Zq@R{@^_Bd@sC^}ALk@Ni@Tq@p@wCPs@J]V{@Zu@hAuAp@o@n@g@`CwAhC}Av@m@h@g@b@q@p@wAL]H_@F_@XeBDaA?i@@QBeBCsB?c@GkI?{@A}Hd@qFFe@lAeD~@eCtBTh@DQjA",
+      "distanceM": 5098.5,
+      "freeFlowS": 429.5,
+      "vertices": 118,
+      "detourRatio": 1.13,
+      "stopsAlong": [
+        {
+          "stopId": "NGL-S4",
+          "alongM": 1.1,
+          "offsetM": 4.6
+        },
+        {
+          "stopId": "SUC-S1",
+          "alongM": 5098.5,
+          "offsetM": 23.9
+        }
+      ],
+      "spurs": [],
+      "legs": [
+        {
+          "from": "NGL-S4",
+          "to": "SUC-S1",
+          "distanceM": 5097.4,
+          "freeFlowS": 429.5
+        }
+      ]
+    },
+    {
+      "routeId": "NGL-KK",
+      "name": "Anna Bus Stand - Suchindram - Kottaram - Kanyakumari",
+      "stopIds": [
+        "NGL-S4",
+        "SUC-S1",
+        "KTM-S1",
+        "KK-S1"
+      ],
+      "polyline": "}~|p@o{rwMA?CSHC\\?FDTRD@|@DR@NARQROt@o@rGgG`E{BdA[zBo@~Bu@x@UfAYVGxBk@d@OxBg@nB[jBKLAnAEH@VC\\CVCFALEj@a@\\U`@_@tAeAbC_BhAo@TQRKl@{AL_AHaBF_EB]HUNa@Xm@Ze@r@aADE`@}@Lk@Tq@Vw@`@m@j@u@xAaBnAmAXW~@y@fAaArC{Cd@u@p@gAR]NWLKJIzCqApAy@xAoA`@_@Zq@R{@^_Bd@sC^}ALk@Ni@Tq@p@wCPs@J]V{@Zu@hAuAp@o@n@g@`CwAhC}Av@m@h@g@b@q@p@wAL]H_@F_@XeBDaA?i@@QBeBCsB?c@GkI?{@A}Hd@qFFe@lAeD~@eCtBTh@D|AHVClAI?BBHFTBJjAY|@Mz@Kn@KhAa@x@a@NBlFV`J^Z_@xBsC~B_EZo@xDqFjAgCp@aCJ_ADYNcB?}B?[?YA}@?SAc@?[C{BCeC?{@?[@gDBmABu@@a@@u@FwCF_CEqFAgBMcI@eBLgADi@Ci@?e@~CkCjB{Ad@a@fByA|@q@v@i@pAy@~AcAzE}CfEmCpA_A~CkBbEmCxAcAx@q@nAeAnAgAfBkB`AmA`BsBhAcBlAsBjB}Cz@mA|@eAfBaBvAoATURURUPWPWtAkCrDeF~JaMnHaJA[?Mx@sC`AyD`@_CX{APg@rAqCp@wAfAkC^y@l@y@TQlA{@|AeAj@g@`@q@JOT_@b@aBNeABg@Ag@Qi@_@{@c@{@KUk@kAWy@s@gEc@}B_@qBYyAESGi@BqDDgCHo@NkA\\oBZaBp@wCPy@j@gBTo@T_@VYh@[xFiDt@i@lAkAhEkJdAoANYv@sAdCIn@C@|@@l@~ACdBG^?tAAAqA?QA{ADOsAmBu@eAa@i@hAo@tBcANSZ_@l@mAJi@@O?[?MCo@GyB?]@]Lk@FOh@sAZm@`@e@HKj@k@dAcA~@_A`@_@r@aAj@k@jAkAjAuAv@}@V[f@o@NSZa@f@s@pDwEh@o@\\UZOPEl@Mx@Kr@MxAQ~@Ub@STG^C^MXSE?IGGGAK@KDIFGJAJ?JFDDFJ\\Cv@ClCIhDc@`SoCzCYjDYlCMhGWhCI`BIRA~CMJArAEpBIfJAjCAR?hDBxUAxFNbEJtBFfABvACv@Ej@MFAf@Oh@Sv@g@p@u@x@_A|@aAl@e@f@]j@Yr@Ud@Il@Ex@Av@@lAFFoALuBHiD@U@]sACQEGQBiB",
+      "distanceM": 19327.2,
+      "freeFlowS": 1472.6,
+      "vertices": 388,
+      "detourRatio": 1.16,
+      "stopsAlong": [
+        {
+          "stopId": "NGL-S4",
+          "alongM": 1.1,
+          "offsetM": 4.6
+        },
+        {
+          "stopId": "SUC-S1",
+          "alongM": 5072.6,
+          "offsetM": 50.2
+        },
+        {
+          "stopId": "KTM-S1",
+          "alongM": 13865.9,
+          "offsetM": 12.1
+        },
+        {
+          "stopId": "KK-S1",
+          "alongM": 19326.8,
+          "offsetM": 22.5
+        }
+      ],
+      "spurs": [
+        {
+          "stopId": "SUC-S1",
+          "lengthM": 86.0,
+          "action": "removed"
+        }
+      ],
+      "legs": [
+        {
+          "from": "NGL-S4",
+          "to": "SUC-S1",
+          "distanceM": 5071.5,
+          "freeFlowS": 427.3
+        },
+        {
+          "from": "SUC-S1",
+          "to": "KTM-S1",
+          "distanceM": 8793.3,
+          "freeFlowS": 680.6
+        },
+        {
+          "from": "KTM-S1",
+          "to": "KK-S1",
+          "distanceM": 5460.8,
+          "freeFlowS": 364.7
+        }
+      ]
+    }
+  ],
+  "problems": []
+}

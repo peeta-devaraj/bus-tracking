@@ -174,11 +174,27 @@ mode on. The trace becomes the route. In `admin.html`, pick that bus under
 creates its route data by being used. That is the answer to "how would this ever
 work in a town with no data?"
 
-`tools/seed_nagercoil.py` provides **approximate** placeholder corridors so there
-is something to demo on day one. They trace real corridors between real
-landmarks but were not surveyed — on the map they visibly cut across country
-instead of following the road. Replace them with recorded traces before claiming
-any of it is accurate.
+**Road-following routes from OpenStreetMap**, for when nobody can ride the bus.
+`tools/build_osm_routes.py` pins every stop to a specific, named OpenStreetMap
+feature (Vadasery Bus Stand is `way/227903070` — open it on openstreetmap.org to
+check), routes between consecutive stops over the real road network with OSRM,
+and writes the result to `tools/data/nagercoil_routes.json`, which is committed.
+`tools/seed_nagercoil.py` loads that file, so nothing depends on OSM being
+reachable at demo time.
+
+Two details matter:
+
+- **Roadside stops don't bend the route.** A stop pinned to a market or a town
+  centre snaps to the nearest lane, and the router drives up that lane and back
+  to touch it. The builder detects those out-and-back detours and cuts them out
+  (286 m at Vadasery Market, 86 m at Suchindram). Detours into *bus stations*
+  are kept, because buses really do drive in.
+- **It is labelled `osm-routed`, not surveyed.** It is the road a vehicle would
+  take between these stops. Where a real bus uses a different road, a recorded
+  trip still beats it.
+
+This replaced hand-placed coordinates that, checked against OpenStreetMap, were
+up to 1.45 km out and visited one route's stops in the wrong order.
 
 ## Arrival estimates
 
@@ -196,9 +212,11 @@ is too stale to reason about. Refusing to answer beats inventing a number.
 .venv/Scripts/python.exe -m pytest tests/ -q
 ```
 
-103 tests. Geometry and validation are pure unit tests; storage tests run
-against Azurite; `test_api_e2e.py` drives the real HTTP surface with real HMAC
-signing and **skips itself** if nothing is listening.
+133 tests. Geometry and validation are pure unit tests;
+`test_route_data.py` checks the committed Nagercoil routes offline (stops on
+their lines, in travel order, no side-lane detours); storage tests run against
+Azurite; `test_api_e2e.py` drives the real HTTP surface with real HMAC signing
+and **skips itself** if nothing is listening.
 
 `tests/test_api_e2e.py::TestIngestRejects` is the demo script in executable
 form — teleporting to Chennai, replaying an old timestamp, tampering with a
@@ -213,8 +231,9 @@ the reject log fill.
   answer — not a bug that was missed.
 - **Web Crypto and Geolocation both need a secure context**, so the driver page
   only works over `https://` or on `localhost`.
-- **Only a few routes exist**, and the seeded ones are approximate. The claim is
-  "a working system demonstrated on real corridors", not "Nagercoil is covered".
+- **Only a few routes exist**, and their geometry is the drivable road between
+  real stops rather than a surveyed bus path. The claim is "a working system
+  demonstrated on real roads", not "Nagercoil is covered".
 - **OpenStreetMap tiles** are used directly. That is fine for a classroom demo
   but their tile policy discourages heavier use; Azure Maps is the swap for
   anything real.

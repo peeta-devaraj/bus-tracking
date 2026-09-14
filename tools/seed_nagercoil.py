@@ -1,22 +1,25 @@
-"""Seed a few Nagercoil corridors so there is something to demonstrate on.
+"""Load the Nagercoil routes and stops into the API.
 
-IMPORTANT, AND WORTH SAYING OUT LOUD IN THE DEMO:
+The data comes from tools/data/nagercoil_routes.json, which is produced by
+tools/build_osm_routes.py:
 
-The geometry below is *approximate*. It traces real corridors between real
-landmarks, but the vertices were placed from map knowledge rather than
-surveyed, so the lines will not sit exactly on the carriageway, and the stop
-positions are indicative.
+  * every stop is pinned to a specific OpenStreetMap feature, so it can be
+    checked by opening openstreetmap.org/<type>/<id>
+  * every route follows the real road network between its stops
+  * detours the router made into side lanes to touch roadside stops (a market,
+    a town centre) have been cut out, because a bus stops on the main road
 
-That is deliberate and it is the point of the project rather than a gap in it.
-Nagercoil has no GTFS feed, no open route list, and no published stop
-database. There is nothing accurate to import. The accurate version of this
-data is produced by *recording* it: open driver.html in record mode, ride the
-route once, and the trace it captures replaces the approximation here. Then
-open admin.html, pick that bus under "Promote a recorded trace", load it onto
-the map, and save it as a route.
+WHAT TO SAY ABOUT IT IN A DEMO
 
-So: use this seed to get pixels moving today, and replace it with a recorded
-route before claiming any of it is survey-grade.
+This is road-following geometry between real, checkable stops. It is *not* a
+surveyed bus route: where a real bus takes a different road from the shortest
+drive between two stops, this will differ. Nagercoil has no GTFS feed, no open
+route list and no stop database, so there is nothing more authoritative to
+import. Recording a real trip with driver.html in record mode still beats it.
+
+An earlier version of this file used hand-placed coordinates. Checked against
+OpenStreetMap they were off by up to 1.45 km, and one route visited its stops
+in the wrong order -- which is why this now reads generated, verifiable data.
 
 Usage:
     python tools/seed_nagercoil.py
@@ -26,142 +29,95 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 
 import requests
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "api"))
-
-from shared.geo import encode_polyline, route_length_m  # noqa: E402
-
-CITY = "nagercoil"
-
-# Approximate corridors. See the warning above before treating these as real.
-ROUTES = [
-    {
-        "routeId": "NGL-VAD-KKD",
-        "name": "Vadasery - Kottar - Nagercoil Junction",
-        "points": [
-            (8.19350, 77.43100),   # Vadasery bus stand area
-            (8.19050, 77.43050),
-            (8.18700, 77.42980),
-            (8.18350, 77.42880),
-            (8.18020, 77.42780),   # Kottar
-            (8.17750, 77.42900),
-            (8.17450, 77.43080),
-            (8.17100, 77.43220),
-            (8.16800, 77.43310),
-            (8.16670, 77.43330),   # Nagercoil Junction railway station
-        ],
-        "stops": [
-            ("NGL-S1", "Vadasery Bus Stand", 8.19350, 77.43100),
-            ("NGL-S2", "Vadasery Market", 8.18700, 77.42980),
-            ("NGL-S3", "Kottar", 8.18020, 77.42780),
-            ("NGL-S4", "Nagercoil Town", 8.17450, 77.43080),
-            ("NGL-S5", "Nagercoil Junction", 8.16670, 77.43330),
-        ],
-    },
-    {
-        "routeId": "NGL-SUC",
-        "name": "Nagercoil - Suchindram",
-        "points": [
-            (8.17750, 77.42900),   # Nagercoil town
-            (8.17400, 77.43600),
-            (8.16900, 77.44400),
-            (8.16400, 77.45200),
-            (8.15900, 77.46000),
-            (8.15470, 77.46740),   # Suchindram
-        ],
-        "stops": [
-            ("NGL-S4", "Nagercoil Town", 8.17450, 77.43080),
-            ("SUC-S1", "Suchindram Temple", 8.15470, 77.46740),
-        ],
-    },
-    {
-        "routeId": "NGL-KK",
-        "name": "Nagercoil - Kanyakumari",
-        "points": [
-            (8.17750, 77.42900),   # Nagercoil town
-            (8.16500, 77.44000),
-            (8.15000, 77.45500),
-            (8.13500, 77.47500),
-            (8.12000, 77.49500),
-            (8.10500, 77.51500),
-            (8.09000, 77.53000),
-            (8.07810, 77.54100),   # Kanyakumari
-        ],
-        "stops": [
-            ("NGL-S4", "Nagercoil Town", 8.17450, 77.43080),
-            ("KK-S1", "Kanyakumari Bus Stand", 8.07810, 77.54100),
-        ],
-    },
-]
+DATA = os.path.join(os.path.dirname(__file__), "data", "nagercoil_routes.json")
 
 
-def seed(api: str, admin_key: str = "") -> None:
+def load(path: str = DATA) -> dict:
+    with open(path, encoding="utf-8") as fh:
+        data = json.load(fh)
+    if data.get("problems"):
+        # The builder refuses to call a problem-free build clean, so a file
+        # carrying problems was written deliberately. Seed it, but say so.
+        print("Warning: this data was built with unresolved problems:", file=sys.stderr)
+        for problem in data["problems"]:
+            print(f"  ! {problem}", file=sys.stderr)
+    return data
+
+
+def seed(api: str, data: dict, admin_key: str = "") -> None:
     headers = {"Content-Type": "application/json"}
     if admin_key:
         headers["X-Admin-Key"] = admin_key
 
-    # Collect which routes serve each stop before writing, so a shared stop
-    # such as Nagercoil Town lists every route through it.
+    city = data["city"]
+
+    # Which routes serve each stop, so a shared stop such as Anna Bus Stand
+    # lists every route through it.
     stop_routes: dict[str, set[str]] = {}
-    stop_meta: dict[str, tuple[str, float, float]] = {}
-    for route in ROUTES:
-        for stop_id, name, lat, lon in route["stops"]:
+    for route in data["routes"]:
+        for stop_id in route["stopIds"]:
             stop_routes.setdefault(stop_id, set()).add(route["routeId"])
-            stop_meta[stop_id] = (name, lat, lon)
 
-    for route in ROUTES:
-        polyline = encode_polyline(route["points"])
-        length_km = route_length_m(route["points"]) / 1000.0
-
+    for route in data["routes"]:
         resp = requests.post(
             f"{api}/manage/routes",
             json={
                 "routeId": route["routeId"],
                 "name": route["name"],
-                "city": CITY,
-                "polyline": polyline,
-                "stopIds": [s[0] for s in route["stops"]],
-                "source": "approximate-seed",
+                "city": city,
+                "polyline": route["polyline"],
+                "stopIds": route["stopIds"],
+                "source": data["source"],
             },
             headers=headers,
             timeout=30,
         )
         resp.raise_for_status()
-        print(f"  route {route['routeId']:<14} {route['name']:<40} {length_km:5.1f} km")
+        print(f"  route {route['routeId']:<12} {route['name']:<54} {route['distanceM'] / 1000:5.2f} km")
 
-    for stop_id, (name, lat, lon) in stop_meta.items():
+    for stop in data["stops"]:
+        if stop["stopId"] not in stop_routes:
+            continue
+        # `position` is where the stop sits on its route line, i.e. where a bus
+        # actually halts. The raw OSM feature can be the middle of a market.
+        position = stop.get("position") or {"lat": stop["featureLat"], "lon": stop["featureLon"]}
         resp = requests.post(
             f"{api}/manage/stops",
             json={
-                "stopId": stop_id,
-                "name": name,
-                "lat": lat,
-                "lon": lon,
-                "city": CITY,
-                "routeIds": sorted(stop_routes[stop_id]),
+                "stopId": stop["stopId"],
+                "name": stop["name"],
+                "lat": position["lat"],
+                "lon": position["lon"],
+                "city": city,
+                "routeIds": sorted(stop_routes[stop["stopId"]]),
             },
             headers=headers,
             timeout=30,
         )
         resp.raise_for_status()
-        print(f"  stop  {stop_id:<14} {name:<40} {len(stop_routes[stop_id])} route(s)")
+        print(f"  stop  {stop['stopId']:<12} {stop['name']:<34} {stop['osm']:<18} "
+              f"{len(stop_routes[stop['stopId']])} route(s)")
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--api", default=os.environ.get("BUSTRACK_API", "http://127.0.0.1:7071/api"))
     parser.add_argument("--admin-key", default=os.environ.get("ADMIN_KEY", ""))
+    parser.add_argument("--data", default=DATA, help="routes file from build_osm_routes.py")
     args = parser.parse_args()
 
-    print(f"Seeding approximate Nagercoil routes into {args.api}")
-    print("These are placeholders. Replace them with recorded traces.\n")
+    data = load(args.data)
+    print(f"Seeding Nagercoil ({data['source']}, built {data['generatedAt']}) into {args.api}")
+    print(f"{data['attribution']}\n")
 
     try:
-        seed(args.api, args.admin_key)
+        seed(args.api, data, args.admin_key)
     except requests.RequestException as exc:
         print(f"\nFailed: {exc}", file=sys.stderr)
         return 1

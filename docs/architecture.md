@@ -223,14 +223,39 @@ flowchart LR
 That is the answer to *"how would this ever work in a town with no data?"* — the
 system creates its route data by being used.
 
+Record mode needs someone on a bus, though, and that is not always available.
+So there is a middle path that needs nobody to ride anything:
+
+```mermaid
+flowchart LR
+    A["Stops pinned to<br/>named OSM features"] --> B["OSRM routes over<br/>the real road network"]
+    B --> C{"Out-and-back<br/>detour?"}
+    C -->|"into a roadside stop<br/>(market, town centre)"| D["Cut it out"]
+    C -->|"into a bus station"| E["Keep it"]
+    D --> F["Place stops on the line,<br/>check travel order"]
+    E --> F
+    F --> G["Committed JSON,<br/>labelled osm-routed"]
+```
+
+Every stop is checkable by opening its OpenStreetMap element. The out-and-back
+check exists because it was found the hard way: routing to a stop pinned to the
+middle of Vadasery Market drove 286 m up a lane and back, and Suchindram's town
+node pulled the Kanyakumari route 86 m into a side street. A bus stops on the
+main road for both. The detector lives in `shared/geo.py` rather than the build
+tool because recorded GPS traces produce the same shape when a bus pulls into a
+stand.
+
+The hand-placed coordinates this replaced were up to 1.45 km out when checked
+against OpenStreetMap, and one route visited its stops in the wrong order.
+
 The other end of the spectrum is proven by the GTFS importer. Chennai MTC's
 public feed goes in — 4,614 routes, 47,056 trips, 1.36 million `stop_times`
 rows — and 3,934 routes come out into the same tables, with **no downstream code
 change**. The feed ships no `shapes.txt` (common for Indian GTFS), so geometry
 falls back to the ordered stops of a representative trip.
 
-Hand-drawn, recorded, and imported routes are indistinguishable to everything
-that reads them.
+Hand-drawn, recorded, OSM-routed, and imported routes are indistinguishable to
+everything that reads them.
 
 ---
 
@@ -250,7 +275,7 @@ a viva.
 | **Auth for ingest** | Per-bus HMAC | Function keys | A shared function key would end up pasted into every driver's browser, and could not be revoked for one bus. |
 | **Signature covers** | Raw request body | Canonical string | Removes the entire class of bugs where browser and server disagree about float formatting. |
 | **Credential transport** | URL fragment | Query string | Fragments are never sent to the server and never appear in server logs. |
-| **Route data** | Record mode | OSM import | OSM's bus-route coverage for Nagercoil is negligible. Recording produces accurate data *and* is the more honest answer to the underlying problem. |
+| **Route data** | OSM-pinned stops routed over real roads; record mode when someone can ride | Hand-placed seed; importing OSM bus relations | OSM has almost no mapped *bus routes* for Nagercoil, but its *roads and landmarks* are good. Hand-placed stops were up to 1.45 km out. Recording is still the most accurate source, but depends on access to a bus. |
 | **Off-route reports** | Flag | Reject | Real buses divert. Rejecting would make the map lie by omission. |
 | **ETA output** | A range | A single number | A tracker that says "7 minutes" and is wrong by four is worse than one that says "6–11" and is right. The range teaches the rider how much to trust it. |
 
@@ -268,9 +293,10 @@ names them.
 - **A driver who lies about position while staying on their route is not
   detectable.** The only real answer is multi-reporter consensus, which is
   designed and not built.
-- **Seeded Nagercoil geometry is approximate** and visibly cuts across country
-  rather than following roads. Replace it with recorded traces before claiming
-  accuracy.
+- **Nagercoil routes are the drivable road between real stops, not surveyed bus
+  paths.** Where a bus takes a longer road than the shortest drive, the line
+  will differ. Which stops a route serves is also an assumption, not a published
+  timetable.
 - **One admin key protects every bus secret.** No rotation, no per-user roles.
 - **Driver location history is retained indefinitely** with no policy and no
   consent flow. That is an ethical gap, not a technical one, and it is real.
@@ -281,8 +307,8 @@ names them.
 
 In the order that would actually add the most value:
 
-1. **Record real Nagercoil routes** — replaces approximate geometry with
-   surveyed data, and is a prerequisite for trusting any ETA.
+1. **Record one real trip per route** — confirms the routed roads are the ones
+   buses actually take, which the OSM-routed geometry can only assume.
 2. **IoT Hub + a GPS module** — removes the wake-lock limitation entirely and
    makes the tracker independent of a driver's phone and goodwill.
 3. **Learned ETAs** — segment travel times by time of day from

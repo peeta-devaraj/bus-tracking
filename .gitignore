@@ -5,6 +5,8 @@ __pycache__/
 .pytest_cache/
 .azurite/
 api/local.settings.json
-data/
+# Root-level scratch data only. Unanchored "data/" also swallowed tools/data/,
+# which holds committed, generated route files the seed script and tests need.
+/data/
 *.zip
 .DS_Store
