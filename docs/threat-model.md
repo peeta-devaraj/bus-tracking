@@ -66,10 +66,28 @@ also what makes it a convincing thing to demonstrate live. *Tested:*
 ### T5 — Flooding the endpoint
 *Adversary 3.* Burn the Function App's execution quota, or bloat storage.
 
-**Response.** One fix per bus per 5 seconds; anything faster is rejected before
-it touches storage. Note the limit is **per bus**, so it is a quota control
-rather than a general DDoS defence — a real flood is Azure's front door to
-absorb, not this function's. *Tested:* `test_flooding_is_rate_limited`.
+**Response.** One fix per bus per 5 seconds; anything faster is rejected.
+
+This entry used to claim such pings were "rejected before it touches storage".
+That was wrong, and re-reading the code found the hole. The 5-second limit runs
+inside validation, *after* the signature is checked, and every rejection wrote
+a row to the log. A badly signed ping never reaches the limit at all. Since bus
+ids are public in `/live`, anyone could read an id, fire badly signed pings at
+it, and make the server write a storage row per request: cost the operator does
+not control, and a reject log so noisy that a real spoofing attempt would be
+invisible in it — which would quietly defeat T1 and T4, whose whole evidence is
+that log.
+
+Rejection *logging* is now capped per bus per minute
+(`BUSTRACK_REJECT_LOG_PER_MINUTE`, default 5). Suppressed rejections are
+counted and reported on the next one written, so the log says how much it
+dropped rather than hiding it. The cap is held in each worker's memory on
+purpose: deciding not to write must not itself cost a read.
+
+The limit is still **per bus**, so it is a quota control rather than a general
+DDoS defence — a real flood is Azure's front door to absorb, not this
+function's. *Tested:* `test_flooding_is_rate_limited`,
+`TestRejectLogFlooding` (end to end), `TestRejectionFlooding` (unit).
 
 ### T6 — A legitimate driver reporting a false position
 *Adversary 2.* The hardest threat, because the credentials are genuine.
@@ -117,8 +135,12 @@ Known weaknesses, stated plainly:
 *Adversary 3.* Overwrite a route so every ETA on it becomes wrong. Quiet and
 damaging, because nothing looks broken.
 
-**Response.** All write endpoints for routes and stops require `ADMIN_KEY`. Note
-that this makes the admin key a single point of failure — see below.
+**Response.** All write endpoints for routes and stops require `ADMIN_KEY`, and
+the guard fails closed: with no key configured, admin requests are refused
+unless storage is the local emulator. An earlier version allowed everything
+when the key was unset, so a cleared app setting would have opened the endpoint
+that hands out bus secrets. The admin key remains a single point of failure —
+see below.
 
 ## What is deliberately not defended
 
@@ -130,13 +152,17 @@ Saying this explicitly is more useful than implying coverage that does not exist
 - **No transport-layer protection beyond TLS.** Sufficient, but there is no
   certificate pinning or device attestation, so a rooted phone can extract its
   own key.
-- **No abuse throttling by IP**, only per bus.
+- **No abuse throttling by IP**, only per bus. Rejection *logging* is capped
+  per bus per minute, so a flood cannot run up storage cost or bury real
+  spoofing attempts in the reject log, but the requests themselves are still
+  served.
 - **No audit trail for admin actions.** Rejections are logged; route edits and
   bus registrations are not.
 - **Location privacy of drivers.** A driver running the page is continuously
-  tracked, and history is retained indefinitely. A real deployment needs a
-  retention policy and the driver's informed consent. This is an ethical
-  obligation, not a technical one, and it is unaddressed today.
+  tracked. History is now deleted after 30 days by a nightly job, which bounds
+  how long that record exists, but nobody asks the driver's informed consent
+  and there is no way for a driver to see or erase their own trail. That is an
+  ethical obligation, not a technical one, and it is still unmet.
 
 ## Designed but not built
 

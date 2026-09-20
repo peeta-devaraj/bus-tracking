@@ -522,3 +522,44 @@ class TestRecordingMode:
         assert trace["count"] >= len(ROUTE_POINTS)
         assert trace["polyline"], "the trace is the route"
         assert trace["lengthM"] > 0
+
+
+class TestRejectLogFlooding:
+    """Bus ids are public in /live, and a rejection is recorded before a
+    signature can be trusted. Without a bound, anyone could make the server
+    write a storage row per request and bury the reject log in noise."""
+
+    def _rejections_for(self, bus_id: str) -> list[dict]:
+        body = requests.get(f"{API}/rejections", params={"limit": 200}, timeout=10).json()
+        return [r for r in body["rejections"] if r.get("busId") == bus_id]
+
+    def test_a_flood_of_bad_signatures_is_bounded_in_the_log(self, bus):
+        bus_id, _ = bus
+        before = len(self._rejections_for(bus_id))
+
+        attempts = 15
+        for _ in range(attempts):
+            resp = post_ping(bus_id, "not-the-real-secret")
+            assert resp.status_code == 401, resp.text
+
+        written = len(self._rejections_for(bus_id)) - before
+        assert written >= 1, "a spoofing attempt must still be recorded"
+        assert written < attempts, f"all {attempts} floods were written to storage"
+
+    def test_a_flooded_bus_does_not_silence_another(self, route_id):
+        noisy_id = f"E2E-{uuid.uuid4().hex[:8]}"
+        quiet_id = f"E2E-{uuid.uuid4().hex[:8]}"
+        for bus_id in (noisy_id, quiet_id):
+            requests.post(
+                f"{API}/manage/buses",
+                json={"busId": bus_id, "label": "flood test", "routeId": route_id},
+                headers=_admin_headers(), timeout=10,
+            )
+        try:
+            for _ in range(15):
+                post_ping(noisy_id, "wrong-secret")
+            post_ping(quiet_id, "wrong-secret")
+            assert self._rejections_for(quiet_id), "one noisy bus must not hide another's"
+        finally:
+            for bus_id in (noisy_id, quiet_id):
+                requests.delete(f"{API}/manage/buses/{bus_id}", headers=_admin_headers(), timeout=10)

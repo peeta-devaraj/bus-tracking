@@ -20,7 +20,14 @@ import time
 import azure.functions as func
 
 from shared import storage, training
-from shared.auth import BUS_ID_HEADER, SIGNATURE_HEADER, new_secret, verify
+from shared.auth import (
+    BUS_ID_HEADER,
+    SIGNATURE_HEADER,
+    admin_allowed,
+    new_secret,
+    verify,
+)
+from shared.ratelimit import WriteLimiter
 from shared.eta import (
     average_speed_kmh_from_history,
     display_range,
@@ -38,6 +45,28 @@ from shared.validation import (
 app = func.FunctionApp()
 
 log = logging.getLogger("bustrack")
+
+# Bus ids are public in /live, and a rejection is logged before a signature can
+# be trusted, so without this anyone could make the server write a storage row
+# per request and bury the reject log in noise. Per worker and in memory: the
+# decision to skip a write must not itself cost a read.
+_rejection_limiter = WriteLimiter(
+    max_per_window=int(os.environ.get("BUSTRACK_REJECT_LOG_PER_MINUTE", 5)),
+    window_s=60.0,
+)
+
+
+def _log_rejection(bus_id: str, reason: str, detail: str) -> None:
+    """Record a rejected report, at a bounded rate per bus.
+
+    Suppressed rejections are counted and reported on the next one that is
+    written, so the log says how much it dropped instead of hiding it.
+    """
+    decision = _rejection_limiter.record(bus_id)
+    if decision.suppressed:
+        detail = f"{detail} (+{decision.suppressed} more suppressed in the previous minute)"
+    if decision.log:
+        storage.record_rejection(bus_id, reason, detail)
 
 CORS_HEADERS = {
     "Access-Control-Allow-Origin": os.environ.get("BUSTRACK_ALLOWED_ORIGIN", "*"),
@@ -63,14 +92,14 @@ def _preflight() -> func.HttpResponse:
 def _is_admin(req: func.HttpRequest) -> bool:
     """Guard for endpoints that hand out secrets or rewrite routes.
 
-    If ADMIN_KEY is unset we are running locally against the emulator, where
-    demanding a key only slows development down. It is required in Azure --
-    see infra/deploy.ps1, which always sets one.
+    Fails closed: with no ADMIN_KEY set, access is allowed only when storage is
+    the local emulator. See shared.auth.admin_allowed.
     """
-    expected = os.environ.get("ADMIN_KEY")
-    if not expected:
-        return True
-    return req.headers.get("X-Admin-Key", "") == expected
+    return admin_allowed(
+        req.headers.get("X-Admin-Key"),
+        os.environ.get("ADMIN_KEY"),
+        storage.connection_string(),
+    )
 
 
 # --------------------------------------------------------------------------
@@ -103,7 +132,7 @@ def ping(req: func.HttpRequest) -> func.HttpResponse:
 
     signature = req.headers.get(SIGNATURE_HEADER, "")
     if not verify(bus["secret"], raw, signature):
-        storage.record_rejection(bus_id, "bad_signature", "HMAC mismatch")
+        _log_rejection(bus_id, "bad_signature", "HMAC mismatch")
         return _json({"error": "signature does not match", "reason": "bad_signature"}, 401)
 
     try:
@@ -151,7 +180,7 @@ def ping(req: func.HttpRequest) -> func.HttpResponse:
     )
 
     if not verdict.accepted:
-        storage.record_rejection(bus_id, verdict.reason or "unknown", verdict.detail)
+        _log_rejection(bus_id, verdict.reason or "unknown", verdict.detail)
         log.warning("rejected fix from %s: %s (%s)", bus_id, verdict.reason, verdict.detail)
         return _json(
             {
@@ -703,6 +732,37 @@ def learn_nightly(timer: func.TimerRequest) -> None:
             training.train_route(route_id)
         except Exception:  # one bad route must not stop the others training
             log.exception("nightly training failed for %s", route_id)
+
+
+# --------------------------------------------------------------------------
+# Timer: enforce the retention window
+# --------------------------------------------------------------------------
+
+# 22:30 UTC is 04:00 in Nagercoil, after the nightly training run.
+@app.timer_trigger(schedule="0 30 22 * * *", arg_name="timer", run_on_startup=False)
+def purge_old_data(timer: func.TimerRequest) -> None:
+    """Delete position history and rejections past the retention window.
+
+    Position history says where a named driver was, minute by minute. Keeping
+    it for ever is a privacy problem, not a storage one, and the nightly
+    training run only ever reads the last two weeks.
+    """
+    history_days = int(os.environ.get("BUSTRACK_HISTORY_RETENTION_DAYS", 30))
+    rejection_days = int(os.environ.get("BUSTRACK_REJECTION_RETENTION_DAYS", 30))
+    now = time.time()
+
+    history_cutoff = time.strftime("%Y%m%d", time.gmtime(now - history_days * 86400))
+    rejection_cutoff = time.strftime("%Y%m%d", time.gmtime(now - rejection_days * 86400))
+
+    bus_ids = [b["RowKey"] for b in storage.list_buses()]
+    fixes = storage.purge_history_before(bus_ids, history_cutoff)
+    rejections = storage.purge_rejections_before(rejection_cutoff)
+
+    if fixes or rejections:
+        log.info(
+            "retention: deleted %d history fixes older than %s and %d rejections older than %s",
+            fixes, history_cutoff, rejections, rejection_cutoff,
+        )
 
 
 # --------------------------------------------------------------------------

@@ -235,7 +235,7 @@ optimistic on *any* traffic, because it ignores time spent stopped.
 .venv/Scripts/python.exe -m pytest tests/ -q
 ```
 
-192 tests. Geometry, validation and the learned model are pure unit tests;
+214 tests. Geometry, validation and the learned model are pure unit tests;
 `test_route_data.py` checks the committed Nagercoil routes offline (stops on
 their lines, in travel order, no side-lane detours); storage tests run against
 Azurite; `test_api_e2e.py` drives the real HTTP surface with real HMAC signing
@@ -264,6 +264,12 @@ the reject log fill.
   anything real.
 - **Bus secrets sit in Table Storage** (encrypted at rest) because the server
   must recompute the HMAC. Azure Key Vault is the documented hardening step.
+- **One admin key still protects every bus secret.** It fails closed now — with
+  no key set, admin endpoints are refused unless storage is the local emulator —
+  but there is still no rotation and no per-user roles.
+- **Driver location history is kept for 30 days**, then deleted by a nightly
+  job (`BUSTRACK_HISTORY_RETENTION_DAYS`). That bounds the exposure; it does not
+  address the driver's informed consent, which remains an ethical gap.
 - **QR codes are rendered by an external service**, so the key travels to that
   service. Acceptable for a demo, not for a deployment.
 

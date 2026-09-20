@@ -302,8 +302,11 @@ names them.
   will differ. Which stops a route serves is also an assumption, not a published
   timetable.
 - **One admin key protects every bus secret.** No rotation, no per-user roles.
-- **Driver location history is retained indefinitely** with no policy and no
-  consent flow. That is an ethical gap, not a technical one, and it is real.
+  The guard fails closed (no key configured means admin is refused unless
+  storage is the local emulator), but one leaked key still exposes every bus.
+- **Driver location history is kept for 30 days** and then deleted nightly.
+  The retention window bounds the exposure, but nobody asks the driver's
+  consent, and that remains an ethical gap rather than a technical one.
 
 ---
 

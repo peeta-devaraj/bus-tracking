@@ -25,6 +25,9 @@ from traffic import STRUCTURED, UNIFORM  # noqa: E402
 
 ROUTE = "NGL-VAD-KKD"
 
+# Simulates eleven days of buses twice over; seconds, not milliseconds.
+pytestmark = pytest.mark.slow
+
 
 @pytest.fixture(scope="module")
 def structured():

@@ -27,6 +27,7 @@ import json
 import os
 import secrets
 import time
+from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable, Iterator
 
 from azure.core.exceptions import (
@@ -318,6 +319,54 @@ def batch_append_history(rows: list[dict[str, Any]]) -> int:
     return written
 
 
+def _delete_partition(table_name: str, partition_key: str) -> int:
+    """Delete every row of one partition. Returns how many went."""
+    client = table(table_name)
+    keys = [
+        e["RowKey"] for e in client.query_entities(
+            f"PartitionKey eq '{partition_key}'", select=["PartitionKey", "RowKey"]
+        )
+    ]
+    for i in range(0, len(keys), BATCH_LIMIT):
+        client.submit_transaction(
+            [("delete", {"PartitionKey": partition_key, "RowKey": rk}) for rk in keys[i : i + BATCH_LIMIT]]
+        )
+    return len(keys)
+
+
+def _days_before(cutoff_day: str, lookback_days: int) -> list[str]:
+    """The `lookback_days` day-stamps immediately before cutoff_day, oldest first."""
+    cutoff = datetime.strptime(cutoff_day, "%Y%m%d").replace(tzinfo=timezone.utc)
+    return [
+        (cutoff - timedelta(days=n)).strftime("%Y%m%d")
+        for n in range(lookback_days, 0, -1)
+    ]
+
+
+def purge_history_before(bus_ids: Iterable[str], cutoff_day: str, lookback_days: int = 21) -> int:
+    """Delete position history older than cutoff_day, for these buses.
+
+    Location history is a record of where a named driver was, so it is not
+    kept for ever. Deleting by whole day partitions keeps this cheap: a daily
+    run only has to clear the day that has just fallen out of the window, and
+    the look-back covers runs that were missed.
+    """
+    deleted = 0
+    days = _days_before(cutoff_day, lookback_days)
+    for bus_id in bus_ids:
+        for day in days:
+            deleted += _delete_partition(T_HISTORY, f"{bus_id}_{day}")
+    return deleted
+
+
+def purge_rejections_before(cutoff_day: str, lookback_days: int = 30) -> int:
+    """Delete rejection-log entries older than cutoff_day."""
+    return sum(
+        _delete_partition(T_REJECTIONS, day)
+        for day in _days_before(cutoff_day, lookback_days)
+    )
+
+
 def recent_history(bus_id: str, day: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
     day = day or time.strftime("%Y%m%d", time.gmtime())
     query = f"PartitionKey eq '{bus_id}_{day}'"
@@ -583,8 +632,9 @@ def record_rejection(bus_id: str, reason: str, detail: str, ts: float | None = N
     )
 
 
-def recent_rejections(limit: int = 50) -> list[dict[str, Any]]:
-    day = time.strftime("%Y%m%d", time.gmtime())
+def recent_rejections(limit: int = 50, day: str | None = None) -> list[dict[str, Any]]:
+    """The reject log for one UTC day, newest first. Defaults to today."""
+    day = day or time.strftime("%Y%m%d", time.gmtime())
     rows = table(T_REJECTIONS).query_entities(
         f"PartitionKey eq '{day}'", results_per_page=limit
     )

@@ -38,7 +38,11 @@ def _listening(port: int) -> bool:
         return False
 
 
-pytestmark = pytest.mark.skipif(not _listening(10002), reason="Azurite not reachable on 10002")
+pytestmark = [
+    pytest.mark.skipif(not _listening(10002), reason="Azurite not reachable on 10002"),
+    # Writes three simulated days of history to storage: about a minute.
+    pytest.mark.slow,
+]
 
 
 @pytest.fixture(scope="module")

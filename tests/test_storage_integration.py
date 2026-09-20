@@ -175,3 +175,53 @@ class TestRejectionLog:
             r for r in storage.recent_rejections(200) if r.get("busId") == bus_id
         )
         assert len(row["detail"]) <= 512
+
+
+class TestRetention:
+    """Position history says where a named driver was, minute by minute.
+    Nothing used to delete it, ever."""
+
+    def _day(self, days_ago: int) -> str:
+        return time.strftime("%Y%m%d", time.gmtime(time.time() - days_ago * 86400))
+
+    def _write_fix(self, bus_id: str, days_ago: int) -> None:
+        storage.batch_append_history([{
+            "busId": bus_id,
+            "ts": time.time() - days_ago * 86400,
+            "lat": 8.183, "lon": 77.432, "alongM": 100.0, "direction": 1,
+        }])
+
+    def test_old_history_goes_and_recent_history_stays(self, bus_id):
+        for days_ago in (40, 31, 29, 2):
+            self._write_fix(bus_id, days_ago)
+
+        cutoff = self._day(30)
+        deleted = storage.purge_history_before([bus_id], cutoff, lookback_days=60)
+        assert deleted == 2, "the 40- and 31-day-old fixes should have gone"
+
+        assert storage.history_for_day(bus_id, self._day(40)) == []
+        assert storage.history_for_day(bus_id, self._day(31)) == []
+        assert len(storage.history_for_day(bus_id, self._day(29))) == 1
+        assert len(storage.history_for_day(bus_id, self._day(2))) == 1
+
+    def test_purging_twice_is_harmless(self, bus_id):
+        self._write_fix(bus_id, 40)
+        cutoff = self._day(30)
+        assert storage.purge_history_before([bus_id], cutoff, lookback_days=60) == 1
+        assert storage.purge_history_before([bus_id], cutoff, lookback_days=60) == 0
+
+    def test_the_lookback_bounds_the_work(self, bus_id):
+        # A daily run only needs to clear the day that just fell out of the
+        # window; a short look-back must not reach further back than it says.
+        self._write_fix(bus_id, 60)
+        assert storage.purge_history_before([bus_id], self._day(30), lookback_days=5) == 0
+        assert len(storage.history_for_day(bus_id, self._day(60))) == 1
+        assert storage.purge_history_before([bus_id], self._day(30), lookback_days=60) == 1
+
+    def test_old_rejections_go_too(self, bus_id):
+        old_ts = time.time() - 45 * 86400
+        storage.record_rejection(bus_id, "teleport", "old entry", ts=old_ts)
+        assert any(r.get("busId") == bus_id for r in storage.recent_rejections(day=self._day(45)))
+
+        storage.purge_rejections_before(self._day(30), lookback_days=60)
+        assert not any(r.get("busId") == bus_id for r in storage.recent_rejections(day=self._day(45)))
