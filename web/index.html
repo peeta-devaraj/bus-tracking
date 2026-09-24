@@ -427,9 +427,11 @@ document.getElementById("closeSidebar").addEventListener("click", () => {
   selectedStopId = null;
 });
 
-onTileTrouble(map, () => {
+const showTileWarning = () => {
   document.getElementById("tileWarn").style.display = "block";
-});
+};
+onTileTrouble(map, showTileWarning);
+guardBasemap(map, showTileWarning);
 
 // Start fetching immediately rather than waiting on map "load". A slow or
 // blocked basemap must not stop bus positions from appearing -- the positions

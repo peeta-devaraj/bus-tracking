@@ -168,31 +168,53 @@ function encodePolyline(latLonPairs, precision = 5) {
   return out;
 }
 
-// The map style: OpenStreetMap raster tiles, no API key, no billing surface.
+// The map style: OpenStreetMap data served by OpenFreeMap, no API key, no
+// sign-up, no billing surface.
 //
-// The background layer underneath the tiles matters more than it looks. When
-// tiles are slow, blocked by a network, or unavailable offline, the map still
-// renders a neutral canvas with the routes and buses drawn on top, instead of
-// a black void that reads as "the app is broken". The position data is the
-// point; the basemap is context.
+// This used to load tile.openstreetmap.org directly. That server is run by
+// volunteers, its usage policy discourages apps like this one, and on the day
+// of the demo it answered Brave with an "Access blocked" image in every tile.
+// CARTO's free basemap was tried next and now stamps "API KEY REQUIRED" over
+// every tile. OpenFreeMap exists precisely to be used this way. Azure Maps
+// remains the swap for anything real.
+const BASEMAP_STYLE_URL = "https://tiles.openfreemap.org/styles/liberty";
+
 function osmStyle() {
+  return BASEMAP_STYLE_URL;
+}
+
+// A style with nothing in it but a neutral background. If the basemap style
+// cannot be fetched at all (blocked network, offline), the map would otherwise
+// never finish loading its style, and route lines -- which need a loaded
+// style -- would never be drawn. Falling back to this keeps routes and buses
+// on screen over a plain canvas. The position data is the point; the basemap
+// is context.
+function fallbackStyle() {
   const dark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
   return {
     version: 8,
-    sources: {
-      osm: {
-        type: "raster",
-        tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"],
-        tileSize: 256,
-        maxzoom: 19,
-        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-      },
-    },
+    sources: {},
     layers: [
       { id: "background", type: "background", paint: { "background-color": dark ? "#1a2030" : "#e8e6e1" } },
-      { id: "osm", type: "raster", source: "osm" },
     ],
   };
+}
+
+// Switch to the plain background if the basemap style has not loaded in time.
+// `onFallback` lets a page say so plainly.
+//
+// It listens for "style.load" rather than asking isStyleLoaded(), which stays
+// false while tiles are still downloading and would trigger the fallback on a
+// merely slow network. Call it right after creating the map, before the style
+// can have arrived.
+function guardBasemap(map, onFallback, timeoutMs = 10000) {
+  let arrived = false;
+  map.once("style.load", () => { arrived = true; });
+  setTimeout(() => {
+    if (arrived) return;
+    map.setStyle(fallbackStyle());
+    if (onFallback) onFallback();
+  }, timeoutMs);
 }
 
 // Run `fn` once the style can accept addSource/addLayer.
@@ -229,7 +251,8 @@ function whenStyleReady(map, fn) {
 function onTileTrouble(map, callback) {
   let reported = false;
   map.on("error", (e) => {
-    const isTile = e && e.sourceId === "osm";
+    // Basemap sources are the style's own; the pages add routes, draw, existing.
+    const isTile = e && e.sourceId && !["routes", "draw", "existing"].includes(e.sourceId);
     if (isTile && !reported) {
       reported = true;
       callback();
