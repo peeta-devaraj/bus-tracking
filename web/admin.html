@@ -195,6 +195,7 @@ const map = new maplibregl.Map({
   zoom: CFG.defaultZoom,
 });
 map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
+guardBasemap(map);
 
 let drawnPoints = [];   // [lat, lon]
 let pointMarkers = [];

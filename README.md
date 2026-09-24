@@ -259,9 +259,11 @@ the reject log fill.
 - **Only a few routes exist**, and their geometry is the drivable road between
   real stops rather than a surveyed bus path. The claim is "a working system
   demonstrated on real roads", not "Nagercoil is covered".
-- **OpenStreetMap tiles** are used directly. That is fine for a classroom demo
-  but their tile policy discourages heavier use; Azure Maps is the swap for
-  anything real.
+- **The basemap comes from OpenFreeMap**, free OpenStreetMap-based tiles with
+  no key. It used to load `tile.openstreetmap.org` directly, whose volunteer
+  servers blocked the site in Brave on demo day. If the basemap cannot load at
+  all, the map falls back to a plain background and keeps drawing routes and
+  buses. Azure Maps is the swap for anything real.
 - **Bus secrets sit in Table Storage** (encrypted at rest) because the server
   must recompute the HMAC. Azure Key Vault is the documented hardening step.
 - **One admin key still protects every bus secret.** It fails closed now — with

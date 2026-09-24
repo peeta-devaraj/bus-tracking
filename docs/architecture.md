@@ -271,7 +271,7 @@ a viva.
 | **Realtime** | HTTP polling (3s) | SignalR | SignalR's free tier caps at **20 concurrent connections**. A classroom of 30 would break it mid-demo. Polling has no cap and costs nothing extra. |
 | **Hardware ingest** | Deferred | IoT Hub now | Free tier allows 8,000 messages/day at 0.5 KB. One bus pinging every 10s uses **8,640 on its own**. Deferring is a costed decision, not an omission — and the pipeline was built so adding it needs no rework. |
 | **Compute** | Functions on Consumption | A VM | A rented VM running a web server is not meaningfully a cloud architecture. Consumption scales to zero, which matters when the credit is finite. |
-| **Basemap** | OpenStreetMap raster | Azure Maps | No API key, no billing surface. Azure Maps is the documented swap for anything real, since OSM's tile policy discourages heavy use. |
+| **Basemap** | OpenFreeMap (OSM data), with a plain-background fallback | Azure Maps; tile.openstreetmap.org; CARTO | No API key, no billing surface. OSM's own tile servers blocked the site in Brave on demo day, and CARTO's free tiles now carry an "API KEY REQUIRED" watermark. Azure Maps is the documented swap for anything real. |
 | **Auth for ingest** | Per-bus HMAC | Function keys | A shared function key would end up pasted into every driver's browser, and could not be revoked for one bus. |
 | **Signature covers** | Raw request body | Canonical string | Removes the entire class of bugs where browser and server disagree about float formatting. |
 | **Credential transport** | URL fragment | Query string | Fragments are never sent to the server and never appear in server logs. |
